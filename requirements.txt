@@ -1,0 +1,9 @@
+numpy<2
+sounddevice
+faster-whisper
+tkcalendar
+keyring
+
+# Optional recognition backends (install only when using them):
+# pywhispercpp
+# useful-moonshine-onnx

@@ -1,0 +1,102 @@
+# HAM Voice Logger — Cursor ルール
+
+## このリポジトリ
+
+アマチュア無線向けのローカル音声認識・コールサイン抽出・QSOログ支援（Python / Tkinter）。
+
+- 認識とQSO記録は独立させる。
+- Callbook照会は手動のみ（文字起こしごとの自動照会はしない）。
+- 認証情報はOSの資格情報ストアのみ。リポジトリとSQLiteには保存しない。
+- 有料APIやクラウド音声認識に依存しない。
+
+コードやUXを変えたら、必要に応じて `README.md` と `HANDOFF.md` も現状に合わせて更新する。
+
+## 構成（ずれさせない）
+
+| 領域 | モジュール | 内容 |
+|---|---|---|
+| GUI / ワーカー | `gui.py` | Tkinter UI、認識ワーカー、設定、QSO、ADIF |
+| 設定 | `app_settings.py` | JSON設定とウィンドウ幾何 |
+| 音声 | `audio_monitor.py` | マイク、RMS VAD、デバイス更新・解決 |
+| 認識 | `decoder.py` | 複数エンジンのカタログ、DL、`SpeechDecoder` |
+| コールサイン | `callsign_extractor.py` | 直接表記＋英和フォネティック＋一部解読 |
+| Callbook | `callbook.py` | HamQTH 公開DXCC JSON＋認証XML |
+| ログDB | `log_store.py` | `~/.ham_voice_logger/` 配下のSQLite |
+| ADIF | `adif_export.py` / `adif_import.py` | 完了QSOのADI出力・取込 |
+| HAMLOG | `hamlog_csv_export.py` / `hamlog_csv_import.py` | Turbo HAMLOG用CSV出力・取込 |
+| JCC/JCG | `jcc_jcg.py` | 同梱 `data/jcc_jcg.csv` → QTH補助 |
+| 起動 | `main.py` | 既定はGUI。`--cli` でターミナル |
+
+### 音声認識エンジン
+
+カタログキーは `engine:label`（例: `faster-whisper:small`、`whisper.cpp:tiny`、`moonshine:tiny-ja`）。従来の short name（`small` など）は `faster-whisper:small` に正規化する。
+
+- **faster-whisper**（既定・`requirements.txt` に含む）: Hugging Face キャッシュ。GUI認識は `local_files_only=True`（重みの自動取得なし）。
+- **whisper.cpp**（任意）: ggml を `~/.ham_voice_logger/models/whisper.cpp/` へ。初回利用時に `pywhispercpp` を自動インストール。
+- **Moonshine**（任意）: `UsefulSensors/moonshine` の `onnx/merged/<label>/float/` を `~/.ham_voice_logger/models/moonshine/<label>/` へ。日本語ONNXは **`tiny-ja` のみ**（同配置に `base-ja` は無い）。初回利用時に `useful-moonshine-onnx` を自動インストール。
+
+GUIのモデル取得は「設定」→「認識モデル」（`decoder.download_model`）のみ。メインのコンボは取得済みだけ。CLI（`--cli`）は未取得ならその場で取得してよい。
+
+### 音声 / UX の制約
+
+- ホットプラグ: デバイス一覧更新や認識開始時に PortAudio を再初期化する。既定デバイスの `_InputOutputPair` を正しく扱う。
+- 認識エラーはダイアログを1回だけ出す（ポーリング再入による連打を防ぐ）。
+- 候補はオペレータがクリックしたときだけ保存する。表示クリアで保存済みデータを消さない。
+- Callbookから住所・メール・生年・プロフィール本文は保存しない。
+
+## コミットメッセージ規約
+
+Conventional Commits に準拠する。**`<subject>` と `<body>` は日本語で書く。** `<type>` / `<scope>` は下記の英語トークンのまま。ユーザーが英語指定しない限り、要約・本文を英語にしない。
+
+```
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+例:
+
+```
+feat(gui): 履歴削除モードとロック保護を追加
+
+誤登録をまとめて消せるようにし、ロック中と記録中のQSOは削除対象外にする。
+```
+
+### タイプ（type）
+
+- `feat`: 新機能の追加
+- `fix`: バグ修正
+- `docs`: ドキュメントのみの変更
+- `style`: コードの動作に影響しない変更（フォーマット等）
+- `refactor`: バグ修正や機能追加を伴わないコードの改善
+- `perf`: パフォーマンス改善
+- `test`: テストの追加・修正
+- `chore`: ビルドプロセスやツールの変更
+- `ci`: CI設定の変更
+- `build`: ビルドシステムや依存関係の変更
+
+### スコープ（scope）
+
+- `gui`: Tkinter UI
+- `audio`: マイク監視・区間切り出し・デバイス
+- `decoder`: ローカル音声認識・モデルカタログ・DL
+- `callsign`: コールサイン抽出
+- `callbook`: HamQTH照会・資格情報
+- `log`: SQLite保存・検索
+- `adif`: ADIF出力
+- `hamlog`: Turbo HAMLOG用CSV出力
+- `cli`: ターミナル起動
+- `docs`: README / HANDOFF
+- `deps`: 依存関係
+- `config`: エディタ設定や無視ファイル
+
+## 実装上の注意
+
+- コア依存は `requirements.txt` に置く。任意ASRパッケージは任意のまま（利用時の自動インストールは可）。
+- `numpy<2` は意図的（このMacでの faster-whisper / NumPy 2 警告回避）。
+- 自動テストは `python -m unittest discover -s tests` で実行できること。
+- 実マイクや実無線の認識精度は、ユニットテストより実機確認を優先する。
+- `.vscode/settings.json` を勝手に上書きしない。
+- GUI設定とウィンドウ幾何は `~/.ham_voice_logger/settings.json`（`app_settings.py`）へ保存する。認証情報はここに置かない。
