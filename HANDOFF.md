@@ -4,7 +4,7 @@
 
 Build a cross-platform amateur-radio QSO assistant. It listens to a microphone, transcribes speech locally, extracts Japanese callsign candidates, and lets the operator confirm callsigns and manage QSO logs. Recognition and QSO logging are intentionally independent.
 
-Primary constraints: Python 3.10+, Windows/macOS/Linux, local speech recognition, no paid service dependency, and a GUI usable while radio logging software is open.
+Primary constraints: Python 3.12+ (prefer the latest 3.12.x patch), Windows/macOS/Linux, local speech recognition, no paid service dependency, and a GUI usable while radio logging software is open.
 
 ## Current State
 
@@ -30,7 +30,7 @@ Research sources: [HamQTH developer documentation](https://www.hamqth.com/develo
 
 ## Running on This Mac
 
-This workspace was set up on Apple Silicon macOS using Homebrew Python 3.12. Tk support is installed with `python-tk@3.12`; the virtual environment is `.venv/`.
+This workspace was set up on Apple Silicon macOS using Homebrew Python 3.12 (currently 3.12.16+). Tk support is installed with `python-tk@3.12`; the virtual environment is `.venv/`.
 
 ```bash
 source .venv/bin/activate
@@ -49,7 +49,7 @@ Tests:
 python -m unittest discover -s tests
 ```
 
-On a fresh machine, install Python 3.10+ with Tcl/Tk support, then run `python -m pip install -r requirements.txt`. Download a model from Settings before the first GUI recognition start (no auto-download of model weights). Choosing whisper.cpp / Moonshine installs their pip packages automatically. Model and beam size can be changed in the GUI or with `--model` / `--beam-size`.
+On a fresh machine, install Python 3.12+ with Tcl/Tk support (prefer the latest 3.12.x patch), create a venv, upgrade `pip` / `certifi` (`python -m pip install -U "pip>=26.2.2" certifi`), then run `python -m pip install -r requirements.txt`. Download a model from Settings before the first GUI recognition start (no auto-download of model weights). Choosing whisper.cpp / Moonshine installs their pip packages automatically. Model and beam size can be changed in the GUI or with `--model` / `--beam-size`.
 
 ## Data and Compatibility
 

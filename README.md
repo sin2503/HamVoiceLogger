@@ -2,7 +2,7 @@
 
 アマチュア無線の音声をPCのマイクから取り込み、ローカル音声認識で文字起こしし、日本向けコールサイン候補を提示するデスクトップアプリです。オペレータが候補を確認してから保存し、QSOログを別操作で管理します。認識とQSO記録は独立しています。
 
-Python 3.10以上、Windows / macOS / Linux。音声認識はローカル処理（既定は `faster-whisper`。設定から `whisper.cpp` / Moonshine モデルも取得可能）で、有料APIには依存しません。
+Python 3.12以上（推奨は 3.12 系の最新パッチ）、Windows / macOS / Linux。音声認識はローカル処理（既定は `faster-whisper`。設定から `whisper.cpp` / Moonshine モデルも取得可能）で、有料APIには依存しません。
 
 ## できること
 
@@ -29,7 +29,7 @@ Python 3.10以上、Windows / macOS / Linux。音声認識はローカル処理�
 
 ## セットアップ
 
-Python 3.10以上と Tcl/Tk 対応の環境が必要です。
+Python 3.12以上と Tcl/Tk 対応の環境が必要です。セキュリティ修正のため、3.12 系は最新パッチ（例: 3.12.16 以上）を使ってください。
 
 ```bash
 # macOS + Homebrew Python の例
@@ -42,6 +42,9 @@ sudo apt install python3-tk
 WindowsではTcl/Tkを含む公式CPythonインストーラーを使ってください。
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python -m pip install -U "pip>=26.2.2" certifi
 python -m pip install -r requirements.txt
 python main.py
 ```
