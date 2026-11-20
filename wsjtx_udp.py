@@ -43,24 +43,10 @@ def program_id_from_adif(text: str) -> str:
     return text[start : start + length].strip()
 
 
-def canonical_mhz(text: str) -> str:
-    """Strip trailing zeros from a megahertz string. Non-numeric text is kept."""
-    raw = str(text or "").strip()
-    if not raw:
-        return ""
-    try:
-        value = float(raw)
-    except ValueError:
-        return raw
-    rendered = f"{value:.6f}".rstrip("0").rstrip(".")
-    return rendered or "0"
-
-
 def hz_to_mhz(hz: int) -> str:
+    """Format a dial frequency in hertz as megahertz, keeping trailing zeros."""
     whole, frac = divmod(int(hz), 1_000_000)
-    if frac == 0:
-        return str(whole)
-    return f"{whole}.{frac:06d}".rstrip("0")
+    return f"{whole}.{frac:06d}"
 
 
 def logged_qsos_from_datagram(payload: bytes) -> list[dict[str, Any]]:
@@ -72,15 +58,15 @@ def logged_qsos_from_datagram(payload: bytes) -> list[dict[str, Any]]:
 
 
 def ingest_logged_qso(store: LogStore, qso: dict[str, Any]) -> IngestResult:
-    """Insert one logged QSO. The same call, start time, and mode is a duplicate."""
+    """Insert one logged QSO. The same call, start, mode, and frequency is a duplicate."""
     record = dict(qso)
-    record["frequency"] = canonical_mhz(str(record.get("frequency") or ""))
+    record["frequency"] = str(record.get("frequency") or "").strip()
     callsign = str(record.get("callsign") or "")
     started_at = str(record.get("started_at") or "")
     mode = str(record.get("mode") or "")
     provider = str(record.get("lookup_provider") or "") or "WSJT-X/JTDX"
     record["lookup_provider"] = provider
-    if store.find_qso_id(callsign, started_at, "", mode) is not None:
+    if store.find_qso_id(callsign, started_at, record["frequency"], mode) is not None:
         return IngestResult(False, True, callsign.strip().upper(), provider)
     store.add_completed_qso(record)
     return IngestResult(True, False, callsign.strip().upper(), provider)
@@ -216,7 +202,6 @@ def _qsos_from_logged_adif(adif: str) -> list[dict[str, Any]]:
     for qso in adif_text_to_qsos(adif):
         record = dict(qso)
         record["lookup_provider"] = provider
-        record["frequency"] = canonical_mhz(str(record.get("frequency") or ""))
         qsos.append(record)
     return qsos
 

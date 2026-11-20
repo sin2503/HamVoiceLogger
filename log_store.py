@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 import unicodedata
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,20 @@ def _timestamp() -> str:
 
 def _halfwidth(value: str) -> str:
     return unicodedata.normalize("NFKC", value).strip()
+
+
+def _same_frequency(left: str, right: str) -> bool:
+    """Treat ``144.4613`` and ``144.461300`` as the same frequency."""
+    a = _halfwidth(left)
+    b = _halfwidth(right)
+    if a == b:
+        return True
+    if not a or not b:
+        return False
+    try:
+        return Decimal(a) == Decimal(b)
+    except InvalidOperation:
+        return False
 
 
 class LogStore:
@@ -130,27 +145,35 @@ class LogStore:
         frequency: str = "",
         mode: str = "",
     ) -> int | None:
-        """Return an existing QSO id when callsign+start(+freq/mode) already match."""
+        """Return an existing QSO id when callsign+start(+freq/mode) already match.
+
+        A supplied frequency matches numerically, so trailing zeros do not
+        create a second row. An empty frequency skips that check.
+        """
         normalized = _halfwidth(callsign).upper()
         if not normalized or not started_at:
             return None
+        wanted_frequency = _halfwidth(frequency)
+        wanted_mode = _halfwidth(mode)
         with self._connect() as connection:
-            row = connection.execute(
-                """SELECT id FROM qso_logs
+            rows = connection.execute(
+                """SELECT id, frequency FROM qso_logs
                    WHERE callsign = ? AND started_at = ?
-                     AND (? = '' OR frequency = ?)
                      AND (? = '' OR UPPER(mode) = UPPER(?))
-                   ORDER BY id DESC LIMIT 1""",
+                   ORDER BY id DESC""",
                 (
                     normalized,
                     started_at,
-                    _halfwidth(frequency),
-                    _halfwidth(frequency),
-                    _halfwidth(mode),
-                    _halfwidth(mode) or "FM",
+                    wanted_mode,
+                    wanted_mode or "FM",
                 ),
-            ).fetchone()
-        return int(row["id"]) if row is not None else None
+            ).fetchall()
+        for row in rows:
+            if wanted_frequency == "" or _same_frequency(
+                wanted_frequency, str(row["frequency"] or "")
+            ):
+                return int(row["id"])
+        return None
 
     def set_qso_locked(self, qso_ids: list[int], locked: bool) -> int:
         """Set or clear the protect-from-delete lock on QSO rows."""

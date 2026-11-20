@@ -73,6 +73,37 @@ class AdifImportTests(unittest.TestCase):
             self.assertEqual(row["is_dx"], "1")
             self.assertEqual(row["notes"], "pileup")
 
+    def test_trailing_zero_frequency_matches_udp_row(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = LogStore(Path(tmp) / "logger.sqlite3")
+            store.add_completed_qso(
+                {
+                    "callsign": "JG1APZ",
+                    "started_at": "2026-11-20T07:56:00+00:00",
+                    "ended_at": "2026-11-20T07:57:00+00:00",
+                    "frequency": "144.4613",
+                    "mode": "FT8",
+                    "gridsquare": "PM95",
+                }
+            )
+            path = Path(tmp) / "wsjtx.adi"
+            path.write_text(
+                "<EOH>"
+                "<CALL:6>JG1APZ<QSO_DATE:8>20261120<TIME_ON:6>075600"
+                "<FREQ:10>144.461300<MODE:3>FT8<EOR>\n"
+                "<CALL:6>JG1APZ<QSO_DATE:8>20261120<TIME_ON:6>075600"
+                "<FREQ:10>430.511300<MODE:3>FT8<EOR>\n",
+                encoding="ascii",
+            )
+            result = import_adif(path, store)
+            self.assertEqual(result.skipped_duplicate, 1)
+            self.assertEqual(result.imported, 1)
+            rows = store.search_qsos(limit=10)
+            self.assertCountEqual(
+                [row["frequency"] for row in rows],
+                ["144.4613", "430.511300"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

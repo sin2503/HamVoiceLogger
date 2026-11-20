@@ -43,7 +43,7 @@ class WsjtxUdpTests(unittest.TestCase):
         self.assertEqual(qso["callsign"], "JA1YAA")
         self.assertEqual(qso["gridsquare"], "PM95")
         self.assertEqual(qso["mode"], "FT8")
-        self.assertEqual(qso["frequency"], "14.074")
+        self.assertEqual(qso["frequency"], "14.074000")
         self.assertEqual(qso["sent_report"], "-10")
         self.assertEqual(qso["received_report"], "+02")
         self.assertEqual(qso["operator_name"], "Taro")
@@ -81,7 +81,7 @@ class WsjtxUdpTests(unittest.TestCase):
         qso = logged_qsos_from_datagram(packet)[0]
         self.assertEqual(qso["callsign"], "W1AW")
         self.assertEqual(qso["gridsquare"], "FN31")
-        self.assertEqual(qso["frequency"], "14.074")
+        self.assertEqual(qso["frequency"], "14.074000")
         self.assertEqual(qso["mode"], "FT8")
         self.assertEqual(qso["sent_report"], "-08")
         self.assertEqual(qso["received_report"], "-12")
@@ -115,7 +115,7 @@ class WsjtxUdpTests(unittest.TestCase):
         )
         qso = logged_qsos_from_datagram(packet)[0]
         self.assertEqual(qso["started_at"], "2000-01-01T00:00:00+00:00")
-        self.assertEqual(qso["frequency"], "7.074")
+        self.assertEqual(qso["frequency"], "7.074000")
         self.assertEqual(qso["mode"], "FT4")
 
     def test_decode_and_garbage_are_ignored(self) -> None:
