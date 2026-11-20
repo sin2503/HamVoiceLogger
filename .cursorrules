@@ -23,6 +23,7 @@
 | Callbook | `callbook.py` | HamQTH 公開DXCC JSON＋認証XML |
 | ログDB | `log_store.py` | `~/.ham_voice_logger/` 配下のSQLite |
 | ADIF | `adif_export.py` / `adif_import.py` | 完了QSOのADI出力・取込 |
+| WSJT-X / JTDX | `wsjtx_udp.py` | UDPの確定ログ（Logged ADIF / QSO Logged）受信 |
 | HAMLOG | `hamlog_csv_export.py` / `hamlog_csv_import.py` | Turbo HAMLOG用CSV出力・取込 |
 | JCC/JCG | `jcc_jcg.py` | 同梱 `data/jcc_jcg.csv` → QTH補助 |
 | 起動 | `main.py` | 既定はGUI。`--cli` でターミナル |
@@ -86,6 +87,7 @@ feat(gui): 履歴削除モードとロック保護を追加
 - `callbook`: HamQTH照会・資格情報
 - `log`: SQLite保存・検索
 - `adif`: ADIF出力
+- `wsjtx`: WSJT-X / JTDX の UDP ログ受信
 - `hamlog`: Turbo HAMLOG用CSV出力
 - `cli`: ターミナル起動
 - `docs`: README / HANDOFF

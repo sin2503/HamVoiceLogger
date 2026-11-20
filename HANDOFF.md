@@ -59,6 +59,8 @@ The QSO history tab can export or import ADI `.adi` / ADX `.adx` and Turbo HAMLO
 
 History rows can be edited (double-click / 「選択を編集」) via `LogStore.update_qso` into the main QSO form (`editing_qso_id`). QSL defaults for new QSOs live in `settings.json`. QTH→Code uses `jcc_jcg.search_station_codes` from the 「地名→Code」 dialog.
 
+WSJT-X and JTDX logged QSOs are ingested live over UDP (`wsjtx_udp.py`, Settings → WSJT-X). Default listen address is `127.0.0.1:2237` and can be turned off. The listener accepts Logged ADIF (type 12) and QSO Logged (type 5), ignores decodes, and skips a duplicate when callsign, start time, and mode already match. It does not fill the live voice QSO form. An optional multicast group (for example `224.0.0.1`) is for sharing the stream with another program that also needs port 2237. Bind failure shows one dialog.
+
 History delete mode shows a checkbox column (☐/☑); clicking any cell (except 保護) toggles that row so discontinuous multi-select is easy. 「選択を削除」 confirms then calls `LogStore.delete_qsos` (candidates detach first). Outside delete mode the tree uses `selectmode=extended` (⌘/Ctrl discontinuous, Shift range) for ロック / ロック解除. Rows can also be locked via the 保護 column; `is_locked='1'` is persisted. Locked rows and the active QSO (`active_qso_id`, 記録中) are not deletable; `delete_qsos` skips locked rows.
 Callsign extraction is Japan-oriented: prefix `[7-9JQMS]`, total length 6–7, must contain a digit. `JA1YAA` and `7L1ABC` match; 5-character calls such as `JA1AA` and foreign calls such as `W1AW` do not. Candidate sources, in priority order: direct text matches, fully decoded phonetics, then partial phonetic decode when the partial string still matches the callsign regex. Bare digits glued onto phonetic tokens (e.g. `ノベンバー1`) are accepted during decode.
 
@@ -73,6 +75,7 @@ Callsign extraction is Japan-oriented: prefix `[7-9JQMS]`, total length 6–7, m
 - `callbook.py`: HamQTH public DXCC JSON lookup, authenticated XML lookup, and keyring helpers.
 - `log_store.py`: SQLite schema, migrations, QSO/candidate persistence and search.
 - `adif_export.py` / `adif_import.py`: ADI writer and importer.
+- `wsjtx_udp.py`: WSJT-X / JTDX UDP listener for logged QSOs only.
 - `hamlog_csv_export.py` / `hamlog_csv_import.py`: Turbo HAMLOG CSV writer and importer.
 - `jcc_jcg.py` + `data/jcc_jcg.csv`: JCC/JCG/ward code → Japanese QTH helper.
 - `time_format.py`: JST/UTC display helpers and Japan-entity check for DX auto-flag.
@@ -92,8 +95,9 @@ Callsign extraction is Japan-oriented: prefix `[7-9JQMS]`, total length 6–7, m
 8. Done: history delete mode (checkboxes + confirm; detach candidates then delete QSO rows) plus lock / in-progress protection.
 9. Done: edit-from-history; QSL defaults; QTH→Code reverse lookup UI; UTF-8 ADI + ADX export.
 10. Done: always-on-top candidate popup (header toggle; geometry persisted).
-11. Optional: segment audio archive (personal use; retention limits) — not a full HAMLOG clone feature.
-12. Still useful: smoke-test HAMLOG CSV against the operator’s Turbo HAMLOG/Win.
+11. Done: WSJT-X/JTDX UDP ingest of logged QSOs (Logged ADIF and QSO Logged; duplicate skip; optional multicast).
+12. Optional: segment audio archive (personal use; retention limits) — not a full HAMLOG clone feature.
+13. Still useful: smoke-test HAMLOG CSV against the operator’s Turbo HAMLOG/Win.
 
 ## Known Gaps / Next Work
 
@@ -102,7 +106,7 @@ Callsign extraction is Japan-oriented: prefix `[7-9JQMS]`, total length 6–7, m
 - QSL/Code field semantics should be checked against the exact Turbo HAMLOG workflow the operator uses. `Code` is stored as free text, exported as ADIF `CNTY`, and as the HAMLOG CSV Code column.
 - Closing the app while a QSO is open tries to end the QSO first. On failure the operator can retry, force-end (`LogStore.force_end_qso`), or cancel quit so the window stays open. Settings are saved before that end-QSO attempt.
 - Callbook button label is `公開DXCC照会` or `HamQTH照会` from stored credentials while a QSO is active.
-- No automatic cloud sync or automatic QSO creation is intended; callbook lookup is manual and candidate saving requires confirmation.
+- No automatic cloud sync is intended. Voice recognition does not create a QSO by itself; candidate saving and callbook lookup stay manual. A WSJT-X/JTDX contact is stored only after that program's Log QSO action.
 
 ## Workspace Notes
 

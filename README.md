@@ -24,6 +24,7 @@ Python 3.12以上（推奨は 3.12 系の最新パッチ）、Windows / macOS / 
 - QSO開始時のQSL既定値（設定→QSOプリセットで送信／受信／経路を保存）
 - QTHからCode検索（「地名→Code」）。履歴フィルタに送信待ち／請求中も追加
 - ADIFは ASCII ADI / UTF-8 ADI（日本語保持）/ ADX（XML UTF-8）を出力可
+- WSJT-X / JTDX の UDP から、Log QSO した確定交信を履歴へ取り込む（デコードは取り込まない）
 
 ヘッダーの「候補ポップアップ」で、最前面の小さなウィンドウに最新の文字起こしとコールサイン候補を出せます（他ソフト作業中でもクリックで確定可）。音量しきい値、無音終了、認識モデル、ビーム、入力デバイス、ウィンドウ位置・サイズ、最終周波数 / モード、QSOプリセット、時刻表示モード、ポップアップのON/位置は終了時に `~/.ham_voice_logger/settings.json` へ保存し、次回起動で復元します。プリセット編集は「設定」→「QSOプリセット」。CLIの `--model` などは保存値を上書きします。
 
@@ -93,6 +94,14 @@ python -m unittest discover -s tests
 
 コールサイン、周波数、レポート、Codeは全角入力でも保存時に半角へ正規化します。データベースは `~/.ham_voice_logger/logger.sqlite3`、GUI設定は `~/.ham_voice_logger/settings.json` です。JCC/JCG 地名辞書は同梱の `data/jcc_jcg.csv`（JARL 市郡区番号リスト由来のコミュニティ整理版）を参照します。
 
+## WSJT-X / JTDX の UDP
+
+起動すると `127.0.0.1:2237` で待ちます。WSJT-X または JTDX の「Settings → Reporting → UDP Server」を同じアドレスとポートに合わせ、そこで Log QSO した交信が QSO履歴へ入ります。QSO欄の入力中の内容は変えません。デコード（聞こえた局の一覧）は受け取りません。
+
+同じコールサイン・開始時刻・モードが既にある行は入れません。WSJT-X は1件のログで QSO Logged と Logged ADIF の2通を送ることがあるためです。
+
+待受アドレス、ポート、オフ、マルチキャストは「設定」→「WSJT-X」です。GridTracker などが 2237 を既に使っているときは、WSJT-X 側の UDP Server を `224.0.0.1` のようなマルチキャストにし、設定のマルチキャスト欄にも同じアドレスを入れます。ポートを開けないときはダイアログを1回出します。
+
 ## Callbook照会
 
 「設定」→「HamQTH」にユーザー名とパスワードを入れると、OSの資格情報ストア（`keyring`）へ保存します。リポジトリやSQLiteには置きません。アプリ実行中のセッションIDはメモリに最大45分保持し、期限切れなら再ログインします。
@@ -123,6 +132,7 @@ python -m unittest discover -s tests
 | HAMLOG → 本アプリ | 複合検索CSV取込（14列、または先頭レコード番号付き）。CP932/UTF-8 |
 | 本アプリ → 他ログ | ADI（ASCII / UTF-8）および ADX（UTC） |
 | 他ログ → 本アプリ | ADIF 取込（WSJT-X / JTDX / LoTW 等の共通経路） |
+| WSJT-X / JTDX → 本アプリ | UDP（既定 `127.0.0.1:2237`）。Log QSO の確定分だけ。同じコール・開始時刻・モードは重複スキップ |
 
 取込はコールサイン＋開始時刻（＋周波数／モード）が一致すると重複スキップします。HAMLOG側でADIFを直接取り込む場合は、従来どおりCSV変換が無難です。
 
@@ -143,6 +153,7 @@ python -m unittest discover -s tests
 | `callbook.py` | 公開DXCC JSON、認証XML、keyring |
 | `log_store.py` | SQLiteとマイグレーション |
 | `adif_export.py` / `adif_import.py` | ADI書き出し・取込 |
+| `wsjtx_udp.py` | WSJT-X / JTDX の UDP 確定ログ受信 |
 | `hamlog_csv_export.py` / `hamlog_csv_import.py` | Turbo HAMLOG用CSV書き出し・取込 |
 | `tests/` | `unittest` |
 

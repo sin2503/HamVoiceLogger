@@ -131,6 +131,16 @@ def adif_record_to_qso(fields: dict[str, str]) -> dict[str, Any] | None:
     }
 
 
+def adif_text_to_qsos(text: str) -> list[dict[str, Any]]:
+    """Parse ADIF text (a file body or one UDP Logged ADIF field) into QSO dicts."""
+    qsos: list[dict[str, Any]] = []
+    for fields in _parse_records(text):
+        qso = adif_record_to_qso(fields)
+        if qso is not None:
+            qsos.append(qso)
+    return qsos
+
+
 def import_adif(
     source: str | Path,
     store: LogStore,

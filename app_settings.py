@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import socket
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,8 @@ DEFAULT_TIME_DISPLAY = "both"
 DEFAULT_QSL_SENT = "未設定"
 DEFAULT_QSL_RECEIVED = "未設定"
 DEFAULT_QSL_VIA = ""
+DEFAULT_WSJTX_UDP_HOST = "127.0.0.1"
+DEFAULT_WSJTX_UDP_PORT = 2237
 
 _QSL_SENT_CHOICES = ("未設定", "未送信", "送信待ち", "送信済", "無効")
 _QSL_RECEIVED_CHOICES = ("未設定", "未受領", "受領済", "請求中", "無効")
@@ -79,6 +82,10 @@ class AppSettings:
     popup_height: int | None = None
     popup_x: int | None = None
     popup_y: int | None = None
+    wsjtx_udp_enabled: bool = True
+    wsjtx_udp_host: str = DEFAULT_WSJTX_UDP_HOST
+    wsjtx_udp_port: int = DEFAULT_WSJTX_UDP_PORT
+    wsjtx_udp_multicast: str = ""
 
 
 def settings_path() -> Path:
@@ -99,6 +106,34 @@ def _as_float(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def normalize_wsjtx_udp_host(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or len(text) > 253 or any(ch.isspace() for ch in text):
+        return DEFAULT_WSJTX_UDP_HOST
+    return text
+
+
+def normalize_wsjtx_udp_port(value: Any) -> int:
+    port = _as_int(value, DEFAULT_WSJTX_UDP_PORT)
+    if port is None or port < 1 or port > 65535:
+        return DEFAULT_WSJTX_UDP_PORT
+    return port
+
+
+def normalize_wsjtx_udp_multicast(value: Any) -> str:
+    """Return a multicast IPv4 address, or ``''`` when empty or not multicast."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        packed = socket.inet_aton(text)
+    except OSError:
+        return ""
+    if 224 <= packed[0] <= 239:
+        return text
+    return ""
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -296,6 +331,12 @@ def load_settings(path: Path | None = None) -> AppSettings:
         popup_height=_as_int(raw.get("popup_height")),
         popup_x=_as_int(raw.get("popup_x")),
         popup_y=_as_int(raw.get("popup_y")),
+        wsjtx_udp_enabled=_as_bool(raw.get("wsjtx_udp_enabled"), True),
+        wsjtx_udp_host=normalize_wsjtx_udp_host(raw.get("wsjtx_udp_host")),
+        wsjtx_udp_port=normalize_wsjtx_udp_port(raw.get("wsjtx_udp_port")),
+        wsjtx_udp_multicast=normalize_wsjtx_udp_multicast(
+            raw.get("wsjtx_udp_multicast")
+        ),
     )
 
 

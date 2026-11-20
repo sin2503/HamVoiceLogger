@@ -27,6 +27,7 @@ from adif_import import import_adif
 from hamlog_csv_export import export_hamlog_csv
 from hamlog_csv_import import import_hamlog_csv
 from jcc_jcg import lookup_station_code, normalize_station_code, search_station_codes
+from wsjtx_udp import WsjtxUdpListener, ingest_logged_qso
 from time_format import (
     TIME_DISPLAY_MODES,
     format_dual_hint,
@@ -45,6 +46,9 @@ from app_settings import (
     normalize_qsl_received_label,
     normalize_qsl_sent_label,
     normalize_report_presets,
+    normalize_wsjtx_udp_host,
+    normalize_wsjtx_udp_multicast,
+    normalize_wsjtx_udp_port,
     parse_geometry,
     parse_report_preset,
     save_settings,
@@ -511,6 +515,9 @@ class CandidatePopup:
             self.app.notebook.select(self.app.monitor_tab)
         except tk.TclError:
             pass
+
+
+class RecognitionWorker(threading.Thread):
     def __init__(
         self,
         events: queue.Queue[tuple[str, Any]],
@@ -806,6 +813,8 @@ class VoiceLoggerApp:
         self._settings_saved = False
         # Avoid saving the pre-map minsize over the restored geometry.
         self._geometry_persist_enabled = False
+        self._wsjtx_listener: WsjtxUdpListener | None = None
+        self._wsjtx_error_shown: str | None = None
 
         self._configure_window()
         self._build_ui()
@@ -824,6 +833,7 @@ class VoiceLoggerApp:
         # geometry() before the window is mapped is unreliable on macOS.
         self.root.after_idle(self._restore_window_geometry)
         self.root.after(100, self._poll_events)
+        self._start_wsjtx_listener()
 
     def _configure_window(self) -> None:
         self.root.title("HAM Voice Logger")
@@ -1192,6 +1202,10 @@ class VoiceLoggerApp:
         ttk.Label(qso_panel, textvariable=self.qso_status_var, style="Muted.TLabel").grid(
             row=0, column=1, sticky="w", padx=12, pady=(0, 8)
         )
+        self.wsjtx_status_var = tk.StringVar(value="")
+        ttk.Label(
+            qso_panel, textvariable=self.wsjtx_status_var, style="Muted.TLabel"
+        ).grid(row=0, column=2, columnspan=2, sticky="w", padx=(8, 12), pady=(0, 8))
         self.qso_button = ttk.Button(
             qso_panel,
             text="QSO開始",
@@ -1905,12 +1919,15 @@ class VoiceLoggerApp:
         model_tab = ttk.Frame(notebook, padding=12)
         callbook_tab = ttk.Frame(notebook, padding=12)
         preset_tab = ttk.Frame(notebook, padding=12)
+        wsjtx_tab = ttk.Frame(notebook, padding=12)
         notebook.add(model_tab, text="認識モデル")
         notebook.add(callbook_tab, text="HamQTH")
         notebook.add(preset_tab, text="QSOプリセット")
+        notebook.add(wsjtx_tab, text="WSJT-X")
         self._build_model_settings_tab(model_tab, window)
         self._build_callbook_settings_tab(callbook_tab, window)
         self._build_preset_settings_tab(preset_tab, window)
+        self._build_wsjtx_settings_tab(wsjtx_tab, window)
         window.grab_set()
 
     def _close_settings(self) -> None:
@@ -2285,6 +2302,102 @@ class VoiceLoggerApp:
             text="保存",
             style="Accent.TButton",
             command=save,
+        ).pack(side="right", padx=(0, 8))
+
+    def _build_wsjtx_settings_tab(self, tab: ttk.Frame, window: tk.Toplevel) -> None:
+        tab.columnconfigure(1, weight=1)
+        enabled_var = tk.BooleanVar(value=bool(self.settings.wsjtx_udp_enabled))
+        host_var = tk.StringVar(value=self.settings.wsjtx_udp_host)
+        port_var = tk.StringVar(value=str(self.settings.wsjtx_udp_port))
+        multicast_var = tk.StringVar(value=self.settings.wsjtx_udp_multicast)
+        ttk.Checkbutton(
+            tab,
+            text="WSJT-X / JTDX の確定ログを UDP で受ける",
+            variable=enabled_var,
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        ttk.Label(
+            tab,
+            text=(
+                "Log QSO で確定した交信だけを履歴へ入れます。デコードは入れません。"
+                "音声の QSO 欄は変えません。"
+                "WSJT-X / JTDX の UDP Server を、ここのアドレスとポートに合わせます。"
+                "既定は 127.0.0.1 の 2237 です。"
+                "ほかのアプリが同じポートを使っているときは、UDP Server を"
+                "マルチキャスト（例: 224.0.0.1）にして、下の欄にも同じアドレスを入れます。"
+            ),
+            style="Muted.TLabel",
+            wraplength=460,
+            justify="left",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        ttk.Label(tab, text="待受アドレス").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Entry(tab, textvariable=host_var, width=24).grid(
+            row=2, column=1, sticky="w", pady=4
+        )
+        ttk.Label(tab, text="ポート").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Entry(tab, textvariable=port_var, width=8).grid(
+            row=3, column=1, sticky="w", pady=4
+        )
+        ttk.Label(tab, text="マルチキャスト").grid(row=4, column=0, sticky="w", pady=4)
+        ttk.Entry(tab, textvariable=multicast_var, width=24).grid(
+            row=4, column=1, sticky="w", pady=4
+        )
+        ttk.Label(
+            tab,
+            text="空ならユニキャストです。入れるときは 224.0.0.0〜239.255.255.255。",
+            style="Muted.TLabel",
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 10))
+
+        actions = ttk.Frame(tab)
+        actions.grid(row=6, column=0, columnspan=2, sticky="ew")
+        ttk.Button(actions, text="閉じる", command=self._close_settings).pack(side="right")
+
+        def save() -> None:
+            multicast_text = multicast_var.get().strip()
+            if multicast_text and not normalize_wsjtx_udp_multicast(multicast_text):
+                messagebox.showerror(
+                    "WSJT-X UDP",
+                    "マルチキャストは 224.0.0.0 から 239.255.255.255 の IPv4 アドレスです。",
+                    parent=window,
+                )
+                return
+            port_text = port_var.get().strip()
+            if port_text and not port_text.isdigit():
+                messagebox.showerror(
+                    "WSJT-X UDP",
+                    "ポートは 1 から 65535 の数字です。",
+                    parent=window,
+                )
+                return
+            port = normalize_wsjtx_udp_port(port_text or self.settings.wsjtx_udp_port)
+            if port_text and (int(port_text) < 1 or int(port_text) > 65535):
+                messagebox.showerror(
+                    "WSJT-X UDP",
+                    "ポートは 1 から 65535 の数字です。",
+                    parent=window,
+                )
+                return
+            self.settings.wsjtx_udp_enabled = bool(enabled_var.get())
+            self.settings.wsjtx_udp_host = normalize_wsjtx_udp_host(host_var.get())
+            self.settings.wsjtx_udp_port = port
+            self.settings.wsjtx_udp_multicast = normalize_wsjtx_udp_multicast(
+                multicast_text
+            )
+            host_var.set(self.settings.wsjtx_udp_host)
+            port_var.set(str(self.settings.wsjtx_udp_port))
+            multicast_var.set(self.settings.wsjtx_udp_multicast)
+            self._persist_settings()
+            self._start_wsjtx_listener()
+            where = self.settings.wsjtx_udp_multicast or (
+                f"{self.settings.wsjtx_udp_host}:{self.settings.wsjtx_udp_port}"
+            )
+            if self.settings.wsjtx_udp_enabled:
+                detail = f"待受を {where} に設定しました。"
+            else:
+                detail = "UDP待受をオフにしました。"
+            messagebox.showinfo("WSJT-X UDP", detail, parent=window)
+
+        ttk.Button(
+            actions, text="保存", style="Accent.TButton", command=save
         ).pack(side="right", padx=(0, 8))
 
     def _build_preset_settings_tab(self, tab: ttk.Frame, window: tk.Toplevel) -> None:
@@ -3076,6 +3189,16 @@ class VoiceLoggerApp:
                         # re-enter this drain loop and spam the operator.
                         if recognition_error is None:
                             recognition_error = str(payload)
+                    elif event == "wsjtx_logged":
+                        self._ingest_wsjtx_qso(payload)
+                    elif event == "wsjtx_status":
+                        text, is_error = payload
+                        self.wsjtx_status_var.set(text)
+                        if is_error and text != self._wsjtx_error_shown:
+                            self._wsjtx_error_shown = text
+                            self.root.after_idle(
+                                lambda msg=text: self._show_wsjtx_bind_error(msg)
+                            )
                     elif event == "stopped":
                         saw_stopped = True
             except queue.Empty:
@@ -4233,6 +4356,64 @@ class VoiceLoggerApp:
         )
         return format_timestamp(value, mode)
 
+    def _start_wsjtx_listener(self) -> None:
+        self._stop_wsjtx_listener()
+        self._wsjtx_error_shown = None
+        if not hasattr(self, "wsjtx_status_var"):
+            return
+        if not self.settings.wsjtx_udp_enabled:
+            self.wsjtx_status_var.set("WSJT-X UDP はオフ")
+            return
+        self.wsjtx_status_var.set("UDP待受を開始しています")
+
+        def on_qso(qso: dict[str, Any]) -> None:
+            self.events.put(("wsjtx_logged", qso))
+
+        def on_status(text: str, is_error: bool) -> None:
+            self.events.put(("wsjtx_status", (text, is_error)))
+
+        self._wsjtx_listener = WsjtxUdpListener(
+            self.settings.wsjtx_udp_host,
+            self.settings.wsjtx_udp_port,
+            self.settings.wsjtx_udp_multicast,
+            on_qso,
+            on_status,
+        )
+        self._wsjtx_listener.start()
+
+    def _stop_wsjtx_listener(self) -> None:
+        listener = self._wsjtx_listener
+        self._wsjtx_listener = None
+        if listener is not None:
+            listener.stop()
+
+    def _ingest_wsjtx_qso(self, qso: dict[str, Any]) -> None:
+        try:
+            result = ingest_logged_qso(self.store, qso)
+        except Exception as exc:
+            self.wsjtx_status_var.set(f"UDPログの保存に失敗しました: {exc}")
+            return
+        if not result.inserted:
+            return
+        provider = result.provider or "WSJT-X/JTDX"
+        self.wsjtx_status_var.set(f"{provider} から {result.callsign} を取り込みました")
+        self._refresh_history()
+
+    def _show_wsjtx_bind_error(self, message: str) -> None:
+        if self.close_requested or self._wsjtx_error_shown != message:
+            return
+        parent = self.root
+        if self._settings_window is not None and self._settings_window.winfo_exists():
+            parent = self._settings_window
+        messagebox.showerror(
+            "WSJT-X UDP",
+            message
+            + "\n\nGridTracker などが同じポートを使っている場合は、"
+            "WSJT-X / JTDX の UDP Server をマルチキャスト（例: 224.0.0.1）にし、"
+            "設定のマルチキャスト欄にも同じアドレスを入れてください。",
+            parent=parent,
+        )
+
     def _on_close(self) -> None:
         self.close_requested = True
         self._persist_settings()
@@ -4351,6 +4532,12 @@ class VoiceLoggerApp:
             popup_height=self.settings.popup_height,
             popup_x=self.settings.popup_x,
             popup_y=self.settings.popup_y,
+            wsjtx_udp_enabled=bool(self.settings.wsjtx_udp_enabled),
+            wsjtx_udp_host=normalize_wsjtx_udp_host(self.settings.wsjtx_udp_host),
+            wsjtx_udp_port=normalize_wsjtx_udp_port(self.settings.wsjtx_udp_port),
+            wsjtx_udp_multicast=normalize_wsjtx_udp_multicast(
+                self.settings.wsjtx_udp_multicast
+            ),
         )
 
     def _persist_settings(self) -> None:
@@ -4407,6 +4594,7 @@ class VoiceLoggerApp:
                 self._set_capture_settings_state("normal")
                 self.status_var.set("QSOが未保存のため終了を取り消しました")
                 return
+        self._stop_wsjtx_listener()
         try:
             self.root.destroy()
         except tk.TclError:
