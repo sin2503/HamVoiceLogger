@@ -22,6 +22,7 @@
 | コールサイン | `callsign_extractor.py` | 直接表記＋英和フォネティック＋一部解読 |
 | Callbook | `callbook.py` | HamQTH 公開DXCC JSON＋認証XML |
 | ログDB | `log_store.py` | `~/.ham_voice_logger/` 配下のSQLite |
+| 履歴カレンダー | `qso_calendar.py` | QSO履歴の月表示（日曜始まり・日本時間） |
 | ADIF | `adif_export.py` / `adif_import.py` | 完了QSOのADI出力・取込 |
 | WSJT-X / JTDX | `wsjtx_udp.py` | UDPの確定ログ（Logged ADIF / QSO Logged）受信 |
 | HAMLOG | `hamlog_csv_export.py` / `hamlog_csv_import.py` | Turbo HAMLOG用CSV出力・取込 |

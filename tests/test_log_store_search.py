@@ -66,6 +66,13 @@ class LogStoreSearchTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["callsign"], "W1AW")
 
+    def test_started_at_values_follow_mode_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = LogStore(Path(tmp) / "logger.sqlite3")
+            self._seed(store)
+            started = store.started_at_values(mode="FM")
+            self.assertEqual(started, ["2026-01-10T12:00:00+09:00"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,8 +27,10 @@ from adif_import import import_adif
 from hamlog_csv_export import export_hamlog_csv
 from hamlog_csv_import import import_hamlog_csv
 from jcc_jcg import lookup_station_code, normalize_station_code, search_station_codes
+from qso_calendar import counts_for_month, jst_date_of, month_weeks, shift_month
 from wsjtx_udp import WsjtxUdpListener, ingest_logged_qso
 from time_format import (
+    JST,
     TIME_DISPLAY_MODES,
     format_dual_hint,
     format_timestamp,
@@ -1557,10 +1559,14 @@ class VoiceLoggerApp:
 
     def _build_history_tab(self) -> None:
         tab = self.history_tab
-        tab.columnconfigure(0, weight=1)
+        tab.columnconfigure(1, weight=1)
         tab.rowconfigure(3, weight=1)
+        today = datetime.now(JST).date()
+        self._history_cal_year = today.year
+        self._history_cal_month = today.month
+        self._history_calendar_day: date | None = None
         search_row = ttk.Frame(tab)
-        search_row.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        search_row.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 6))
         ttk.Label(search_row, text="履歴検索").pack(side="left", padx=(0, 8))
         self.history_search_var = tk.StringVar()
         search_entry = ttk.Entry(search_row, textvariable=self.history_search_var, width=36)
@@ -1601,7 +1607,7 @@ class VoiceLoggerApp:
         ).pack(side="right", padx=(8, 0))
 
         filter_row = ttk.Frame(tab)
-        filter_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        filter_row.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 8))
         ttk.Label(filter_row, text="モード").pack(side="left")
         self.history_mode_var = tk.StringVar(value="すべて")
         mode_combo = ttk.Combobox(
@@ -1660,7 +1666,7 @@ class VoiceLoggerApp:
         )
 
         delete_row = ttk.Frame(tab)
-        delete_row.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        delete_row.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(0, 8))
         self._history_delete_mode = False
         self._history_checked: set[str] = set()
         self._history_locked: set[str] = set()
@@ -1714,6 +1720,47 @@ class VoiceLoggerApp:
             textvariable=self.history_delete_status_var,
             style="Muted.TLabel",
         ).pack(side="left", padx=(12, 0))
+
+        calendar_frame = ttk.Frame(tab)
+        calendar_frame.grid(row=3, column=0, sticky="n", padx=(0, 10))
+        nav = ttk.Frame(calendar_frame)
+        nav.pack(fill="x")
+        ttk.Button(
+            nav, text="‹", width=3, command=lambda: self._shift_history_calendar(-1)
+        ).pack(side="left")
+        self.history_cal_title_var = tk.StringVar(value=f"{today.year}年{today.month}月")
+        ttk.Label(
+            nav,
+            textvariable=self.history_cal_title_var,
+            font=("TkDefaultFont", 13, "bold"),
+        ).pack(side="left", expand=True)
+        ttk.Button(
+            nav, text="›", width=3, command=lambda: self._shift_history_calendar(1)
+        ).pack(side="right")
+        cal_actions = ttk.Frame(calendar_frame)
+        cal_actions.pack(fill="x", pady=(4, 6))
+        ttk.Button(
+            cal_actions, text="当月", command=self._history_calendar_this_month
+        ).pack(side="left")
+        self.history_cal_clear_button = ttk.Button(
+            cal_actions,
+            text="日付解除",
+            command=self._clear_history_calendar_day,
+            state="disabled",
+        )
+        self.history_cal_clear_button.pack(side="left", padx=(6, 0))
+        self.history_cal_grid = tk.Frame(calendar_frame, background="#edf2ef")
+        self.history_cal_grid.pack(fill="x")
+        self.history_cal_status_var = tk.StringVar(
+            value="○のある日を選ぶと、その日の交信だけを表示します（日本時間）"
+        )
+        ttk.Label(
+            calendar_frame,
+            textvariable=self.history_cal_status_var,
+            style="Muted.TLabel",
+            wraplength=230,
+            justify="left",
+        ).pack(anchor="w", pady=(6, 0))
 
         columns = (
             "select",
@@ -1802,15 +1849,15 @@ class VoiceLoggerApp:
             )
         # Keep the checkbox column collapsed until delete mode is enabled.
         self.history_tree.column("select", width=0, minwidth=0, stretch=False)
-        self.history_tree.grid(row=3, column=0, sticky="nsew")
+        self.history_tree.grid(row=3, column=1, sticky="nsew")
         vertical_scrollbar = ttk.Scrollbar(
             tab, orient="vertical", command=self.history_tree.yview
         )
-        vertical_scrollbar.grid(row=3, column=1, sticky="ns")
+        vertical_scrollbar.grid(row=3, column=2, sticky="ns")
         horizontal_scrollbar = ttk.Scrollbar(
             tab, orient="horizontal", command=self.history_tree.xview
         )
-        horizontal_scrollbar.grid(row=4, column=0, sticky="ew")
+        horizontal_scrollbar.grid(row=4, column=1, sticky="ew")
         self.history_tree.configure(
             yscrollcommand=vertical_scrollbar.set,
             xscrollcommand=horizontal_scrollbar.set,
@@ -3683,6 +3730,7 @@ class VoiceLoggerApp:
             self.history_date_from_var.set("")
         if hasattr(self, "history_date_to_var"):
             self.history_date_to_var.set("")
+        self._history_calendar_day = None
         self._refresh_history()
 
     def _history_row_is_active(self, iid: str) -> bool:
@@ -4136,15 +4184,161 @@ class VoiceLoggerApp:
         self._refresh_callbook_button()
         self._refresh_time_zone_hint()
 
+    def _shift_history_calendar(self, delta: int) -> None:
+        self._history_cal_year, self._history_cal_month = shift_month(
+            self._history_cal_year, self._history_cal_month, delta
+        )
+        self._refresh_history()
+
+    def _history_calendar_this_month(self) -> None:
+        today = datetime.now(JST).date()
+        self._history_cal_year = today.year
+        self._history_cal_month = today.month
+        self._refresh_history()
+
+    def _clear_history_calendar_day(self) -> None:
+        self._history_calendar_day = None
+        self._refresh_history()
+
+    def _select_history_calendar_day(self, day: int) -> None:
+        chosen = date(self._history_cal_year, self._history_cal_month, day)
+        if self._history_calendar_day == chosen:
+            self._history_calendar_day = None
+        else:
+            self._history_calendar_day = chosen
+        self._refresh_history()
+
+    def _history_rows(self, *, limit: int) -> list[dict[str, Any]]:
+        """Rows for the history list and exports.
+
+        A selected calendar day uses the JST date and ignores the typed range.
+        Without a selected day, the existing search filters apply.
+        """
+        query = self.history_search_var.get() if hasattr(self, "history_search_var") else ""
+        kwargs = self._history_filter_kwargs()
+        selected = getattr(self, "_history_calendar_day", None)
+        if selected is None:
+            return self.store.search_qsos(query, limit=limit, **kwargs)
+        wide = dict(kwargs)
+        wide["date_from"] = ""
+        wide["date_to"] = ""
+        rows = self.store.search_qsos(query, limit=100_000, **wide)
+        matched = [
+            row
+            for row in rows
+            if jst_date_of(str(row.get("started_at") or "")) == selected
+        ]
+        return matched[:limit]
+
+    def _history_mark_counts(self) -> dict[int, int]:
+        query = self.history_search_var.get() if hasattr(self, "history_search_var") else ""
+        kwargs = self._history_filter_kwargs()
+        started = self.store.started_at_values(
+            query,
+            mode=kwargs["mode"],
+            dx_only=kwargs["dx_only"],
+            qsl=kwargs["qsl"],
+        )
+        return counts_for_month(started, self._history_cal_year, self._history_cal_month)
+
+    def _paint_history_calendar(self) -> None:
+        if not hasattr(self, "history_cal_grid"):
+            return
+        year = self._history_cal_year
+        month = self._history_cal_month
+        self.history_cal_title_var.set(f"{year}年{month}月")
+        selected = self._history_calendar_day
+        if selected is None:
+            self.history_cal_status_var.set(
+                "○のある日を選ぶと、その日の交信だけを表示します（日本時間）"
+            )
+        else:
+            self.history_cal_status_var.set(
+                f"{selected.year}年{selected.month}月{selected.day}日を表示中"
+            )
+        self.history_cal_clear_button.configure(
+            state="normal" if selected is not None else "disabled"
+        )
+        counts = self._history_mark_counts()
+        for child in self.history_cal_grid.winfo_children():
+            child.destroy()
+        today = datetime.now(JST).date()
+        header_fg = (
+            "#b44d3b",
+            "#5c6b66",
+            "#5c6b66",
+            "#5c6b66",
+            "#5c6b66",
+            "#5c6b66",
+            "#2a5f8a",
+        )
+        for col, (name, fg) in enumerate(zip("日月火水木金土", header_fg, strict=True)):
+            tk.Label(
+                self.history_cal_grid,
+                text=name,
+                width=4,
+                background="#edf2ef",
+                foreground=fg,
+                font=("TkDefaultFont", 10),
+            ).grid(row=0, column=col, padx=1, pady=(0, 2))
+        for row_index, week in enumerate(month_weeks(year, month), start=1):
+            for col, day in enumerate(week):
+                if day is None:
+                    tk.Label(
+                        self.history_cal_grid,
+                        text="",
+                        width=4,
+                        height=2,
+                        background="#edf2ef",
+                    ).grid(row=row_index, column=col, padx=1, pady=1)
+                    continue
+                count = counts.get(day, 0)
+                cell_date = date(year, month, day)
+                is_selected = selected == cell_date
+                if is_selected:
+                    background, foreground = "#146b58", "#ffffff"
+                elif count:
+                    background = "#d7efe6"
+                    if col == 0:
+                        foreground = "#b44d3b"
+                    elif col == 6:
+                        foreground = "#2a5f8a"
+                    else:
+                        foreground = "#174b3e"
+                else:
+                    background, foreground = "#f4f7f5", "#9aaba3"
+                text = str(day) if count == 0 else f"{day}\n○{count}"
+                cell = tk.Label(
+                    self.history_cal_grid,
+                    text=text,
+                    width=4,
+                    height=2,
+                    background=background,
+                    foreground=foreground,
+                    relief="solid" if cell_date == today and not is_selected else "flat",
+                    borderwidth=1,
+                    font=("TkDefaultFont", 10),
+                )
+                cell.grid(row=row_index, column=col, padx=1, pady=1, sticky="nsew")
+                if count:
+                    cell.bind(
+                        "<Button-1>",
+                        lambda _event, chosen=day: self._select_history_calendar_day(
+                            chosen
+                        ),
+                    )
+                    cell.configure(cursor="hand2")
+
     def _refresh_history(self) -> None:
         self._history_after_id = None
         if not hasattr(self, "history_tree"):
             return
+        self._paint_history_calendar()
         previous_checked = set(self._history_checked)
         for item in self.history_tree.get_children():
             self.history_tree.delete(item)
-        query = self.history_search_var.get() if hasattr(self, "history_search_var") else ""
-        rows = self.store.search_qsos(query, **self._history_filter_kwargs())
+        selected = getattr(self, "_history_calendar_day", None)
+        rows = self._history_rows(limit=100_000 if selected is not None else 300)
         visible_ids = {str(row["id"]) for row in rows}
         self._history_locked = {
             str(row["id"])
@@ -4190,7 +4384,12 @@ class VoiceLoggerApp:
                 ),
             )
         if hasattr(self, "history_count_var"):
-            self.history_count_var.set(f"{len(rows)}件")
+            if selected is not None:
+                self.history_count_var.set(
+                    f"{selected.month}/{selected.day} {len(rows)}件"
+                )
+            else:
+                self.history_count_var.set(f"{len(rows)}件")
         self._update_history_delete_controls()
 
     def _export_history_adif(self) -> None:
@@ -4209,10 +4408,7 @@ class VoiceLoggerApp:
         if not destination:
             return
 
-        query = self.history_search_var.get()
-        records = self.store.search_qsos(
-            query, limit=100_000, **self._history_filter_kwargs()
-        )
+        records = self._history_rows(limit=100_000)
         path = destination.lower()
         try:
             if path.endswith(".adx"):
@@ -4263,10 +4459,7 @@ class VoiceLoggerApp:
         if not destination:
             return
 
-        query = self.history_search_var.get()
-        records = self.store.search_qsos(
-            query, limit=100_000, **self._history_filter_kwargs()
-        )
+        records = self._history_rows(limit=100_000)
         try:
             result = export_hamlog_csv(records, destination)
         except (OSError, ValueError, UnicodeError) as exc:

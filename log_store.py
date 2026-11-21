@@ -32,6 +32,78 @@ def _same_frequency(left: str, right: str) -> bool:
         return False
 
 
+def _qso_where(
+    query: str = "",
+    *,
+    mode: str = "",
+    dx_only: bool = False,
+    qsl: str = "",
+    date_from: str = "",
+    date_to: str = "",
+) -> tuple[str, list[Any]]:
+    """WHERE clause shared by history search and the calendar marks."""
+    normalized = _halfwidth(query)
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if normalized.casefold() in {"dx", "is_dx", "dx:1"}:
+        dx_only = True
+        normalized = ""
+
+    if normalized:
+        pattern = f"%{normalized}%"
+        clauses.append(
+            """(
+                callsign LIKE ? OR frequency LIKE ? OR mode LIKE ?
+                OR received_report LIKE ? OR sent_report LIKE ? OR operator_name LIKE ?
+                OR qth LIKE ? OR country LIKE ? OR dxcc LIKE ? OR gridsquare LIKE ?
+                OR cq_zone LIKE ? OR itu_zone LIKE ? OR dxcc_details LIKE ?
+                OR continent LIKE ? OR station_code LIKE ? OR qsl_sent LIKE ?
+                OR qsl_received LIKE ? OR qsl_via LIKE ? OR notes LIKE ?
+                OR remarks2 LIKE ?
+            )"""
+        )
+        params.extend([pattern] * 20)
+
+    mode_text = _halfwidth(mode).upper()
+    if mode_text and mode_text not in {"すべて", "ALL", "*"}:
+        clauses.append("UPPER(mode) = ?")
+        params.append(mode_text)
+
+    if dx_only:
+        clauses.append("is_dx = '1'")
+
+    qsl_key = _halfwidth(qsl).casefold()
+    if qsl_key in {"sent_pending", "未送信"}:
+        clauses.append("(qsl_sent = '' OR qsl_sent = 'N')")
+    elif qsl_key in {"recv_pending", "未受領"}:
+        clauses.append("(qsl_received = '' OR qsl_received = 'N')")
+    elif qsl_key in {"sent", "送信済"}:
+        clauses.append("qsl_sent = 'Y'")
+    elif qsl_key in {"recv", "受領済"}:
+        clauses.append("qsl_received = 'Y'")
+    elif qsl_key in {"queued", "送信待ち"}:
+        clauses.append("qsl_sent = 'Q'")
+    elif qsl_key in {"requested", "請求中"}:
+        clauses.append("qsl_received = 'R'")
+    elif qsl_key in {"invalid_sent", "送信無効"}:
+        clauses.append("qsl_sent = 'I'")
+    elif qsl_key in {"invalid_recv", "受信無効"}:
+        clauses.append("qsl_received = 'I'")
+
+    from_text = _halfwidth(date_from)
+    if from_text:
+        clauses.append("substr(started_at, 1, 10) >= ?")
+        params.append(from_text[:10])
+    to_text = _halfwidth(date_to)
+    if to_text:
+        clauses.append("substr(started_at, 1, 10) <= ?")
+        params.append(to_text[:10])
+
+    where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    return where_sql, params
+
+
 class LogStore:
     """Store confirmed recognition candidates separately from QSO sessions."""
 
@@ -513,82 +585,59 @@ class LogStore:
         """Search QSO logs with optional structured filters.
 
         ``qsl`` accepts: ``sent_pending``, ``recv_pending``, ``sent``, ``recv``.
-        ``date_from`` / ``date_to`` are ``YYYY-MM-DD`` (inclusive) against ``started_at``.
+        ``date_from`` / ``date_to`` are ``YYYY-MM-DD`` (inclusive) against the
+        leading date of ``started_at`` (the stored timestamp's own calendar date).
         """
-        normalized = _halfwidth(query)
-        select_sql = """SELECT id, started_at, ended_at, callsign, frequency, mode,
+        where_sql, params = _qso_where(
+            query,
+            mode=mode,
+            dx_only=dx_only,
+            qsl=qsl,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        params.append(limit)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""SELECT id, started_at, ended_at, callsign, frequency, mode,
                                   received_report, sent_report, operator_name, qth, country,
                                   dxcc, gridsquare, cq_zone, itu_zone, dxcc_details, continent,
                                   lookup_provider, lookup_at, station_code, qsl_sent, qsl_received,
                                   qsl_via, notes, remarks2, is_dx, is_locked
-                   FROM qso_logs"""
-        clauses: list[str] = []
-        params: list[Any] = []
-
-        if normalized.casefold() in {"dx", "is_dx", "dx:1"}:
-            dx_only = True
-            normalized = ""
-
-        if normalized:
-            pattern = f"%{normalized}%"
-            clauses.append(
-                """(
-                    callsign LIKE ? OR frequency LIKE ? OR mode LIKE ?
-                    OR received_report LIKE ? OR sent_report LIKE ? OR operator_name LIKE ?
-                    OR qth LIKE ? OR country LIKE ? OR dxcc LIKE ? OR gridsquare LIKE ?
-                    OR cq_zone LIKE ? OR itu_zone LIKE ? OR dxcc_details LIKE ?
-                    OR continent LIKE ? OR station_code LIKE ? OR qsl_sent LIKE ?
-                    OR qsl_received LIKE ? OR qsl_via LIKE ? OR notes LIKE ?
-                    OR remarks2 LIKE ?
-                )"""
-            )
-            params.extend([pattern] * 20)
-
-        mode_text = _halfwidth(mode).upper()
-        if mode_text and mode_text not in {"すべて", "ALL", "*"}:
-            clauses.append("UPPER(mode) = ?")
-            params.append(mode_text)
-
-        if dx_only:
-            clauses.append("is_dx = '1'")
-
-        qsl_key = _halfwidth(qsl).casefold()
-        if qsl_key in {"sent_pending", "未送信"}:
-            clauses.append("(qsl_sent = '' OR qsl_sent = 'N')")
-        elif qsl_key in {"recv_pending", "未受領"}:
-            clauses.append("(qsl_received = '' OR qsl_received = 'N')")
-        elif qsl_key in {"sent", "送信済"}:
-            clauses.append("qsl_sent = 'Y'")
-        elif qsl_key in {"recv", "受領済"}:
-            clauses.append("qsl_received = 'Y'")
-        elif qsl_key in {"queued", "送信待ち"}:
-            clauses.append("qsl_sent = 'Q'")
-        elif qsl_key in {"requested", "請求中"}:
-            clauses.append("qsl_received = 'R'")
-        elif qsl_key in {"invalid_sent", "送信無効"}:
-            clauses.append("qsl_sent = 'I'")
-        elif qsl_key in {"invalid_recv", "受信無効"}:
-            clauses.append("qsl_received = 'I'")
-
-        from_text = _halfwidth(date_from)
-        if from_text:
-            clauses.append("substr(started_at, 1, 10) >= ?")
-            params.append(from_text[:10])
-        to_text = _halfwidth(date_to)
-        if to_text:
-            clauses.append("substr(started_at, 1, 10) <= ?")
-            params.append(to_text[:10])
-
-        where_sql = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        params.append(limit)
-        with self._connect() as connection:
-            rows = connection.execute(
-                f"""{select_sql}
+                   FROM qso_logs
                     {where_sql}
                     ORDER BY started_at DESC LIMIT ?""",
                 params,
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def started_at_values(
+        self,
+        query: str = "",
+        *,
+        mode: str = "",
+        dx_only: bool = False,
+        qsl: str = "",
+        date_from: str = "",
+        date_to: str = "",
+    ) -> list[str]:
+        """Start timestamps matching the same filters as ``search_qsos``."""
+        where_sql, params = _qso_where(
+            query,
+            mode=mode,
+            dx_only=dx_only,
+            qsl=qsl,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""SELECT started_at FROM qso_logs
+                    {where_sql}
+                    ORDER BY started_at DESC""",
+                params,
+            ).fetchall()
+        return [str(row["started_at"] or "") for row in rows]
 
     def recent_candidates(self, query: str = "", limit: int = 100) -> list[dict[str, Any]]:
         pattern = f"%{query.strip()}%"

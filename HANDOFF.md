@@ -55,6 +55,8 @@ On a fresh machine, install Python 3.12+ with Tcl/Tk support (prefer the latest 
 
 SQLite data lives at `~/.ham_voice_logger/logger.sqlite3`. `LogStore` adds missing columns at startup, so older databases are migrated in place. Do not store API passwords in the database.
 
+The QSO history tab has a Sunday-first month calendar (`qso_calendar.py`) on the left. Days with QSOs show a mark and count, grouped by JST date (a contact just after 00:00 JST stays on that JST day even when the stored timestamp is the previous UTC date). Choosing a day lists only that day's QSOs in the existing tree; choosing it again or 「日付解除」 clears the day. Search text, mode, DX, and QSL still filter both the marks and the list. The typed start/end dates apply when no calendar day is selected. ADIF and HAMLOG CSV export the rows currently shown.
+
 The QSO history tab can export or import ADI `.adi` / ADX `.adx` and Turbo HAMLOG CSV against the current search filters. ADI export converts timestamps to UTC and maps reports/QSL/`CNTY`; ASCII mode omits non-ASCII optional fields, UTF-8 ADI and ADX keep Japanese Name/QTH/etc. ADI import (`adif_import.py`) reads UTF-8/CP932 ADI and inserts completed QSOs. HAMLOG CSV export uses the classic 14-column append layout (no record numbers), JST `yy/mm/dd` + `HH:MMJ`, CP932, CRLF. HAMLOG CSV import (`hamlog_csv_import.py`) accepts 14 columns or a leading record-number column. Duplicate rows (same callsign + started_at + freq/mode) are skipped.
 
 History rows can be edited (double-click / 「選択を編集」) via `LogStore.update_qso` into the main QSO form (`editing_qso_id`). QSL defaults for new QSOs live in `settings.json`. QTH→Code uses `jcc_jcg.search_station_codes` from the 「地名→Code」 dialog.
@@ -74,6 +76,7 @@ Callsign extraction is Japan-oriented: prefix `[7-9JQMS]`, total length 6–7, m
 - `callsign_extractor.py`: direct and phonetic callsign extraction plus partial decoding.
 - `callbook.py`: HamQTH public DXCC JSON lookup, authenticated XML lookup, and keyring helpers.
 - `log_store.py`: SQLite schema, migrations, QSO/candidate persistence and search.
+- `qso_calendar.py`: Sunday-first month grid and JST day grouping for the history calendar.
 - `adif_export.py` / `adif_import.py`: ADI writer and importer.
 - `wsjtx_udp.py`: WSJT-X / JTDX UDP listener for logged QSOs only.
 - `hamlog_csv_export.py` / `hamlog_csv_import.py`: Turbo HAMLOG CSV writer and importer.
@@ -90,7 +93,7 @@ Callsign extraction is Japan-oriented: prefix `[7-9JQMS]`, total length 6–7, m
 3. Done: report presets (e.g. 59/59 buttons; Settings editor).
 4. Done: JCC/JCG/ward code → QTH helper (`jcc_jcg.py`, bundled CSV).
 5. Done: DX checkbox (auto-on for non-Japan callbook); JST/UTC/both history display; export keeps ADIF=UTC / HAMLOG=JST and tags DX in COMMENT / Remarks1.
-6. Done: history compound search (text + mode / DX / QSL / date range); exports use current filters.
+6. Done: history compound search (text + mode / DX / QSL / date range); exports use current filters. A JST month calendar filters the same list to one day.
 7. Done: ADIF import + HAMLOG CSV import (duplicate skip; history-tab buttons).
 8. Done: history delete mode (checkboxes + confirm; detach candidates then delete QSO rows) plus lock / in-progress protection.
 9. Done: edit-from-history; QSL defaults; QTH→Code reverse lookup UI; UTF-8 ADI + ADX export.
