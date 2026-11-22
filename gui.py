@@ -28,7 +28,7 @@ from hamlog_csv_export import export_hamlog_csv
 from hamlog_csv_import import import_hamlog_csv
 from jcc_jcg import lookup_station_code, normalize_station_code, search_station_codes
 from qso_calendar import counts_for_month, jst_date_of, month_weeks, shift_month
-from wsjtx_udp import WsjtxUdpListener, ingest_logged_qso
+from wsjtx_udp import WsjtxUdpListener, apply_hamqth_to_qso, ingest_logged_qso
 from time_format import (
     JST,
     TIME_DISPLAY_MODES,
@@ -3238,6 +3238,17 @@ class VoiceLoggerApp:
                             recognition_error = str(payload)
                     elif event == "wsjtx_logged":
                         self._ingest_wsjtx_qso(payload)
+                    elif event == "wsjtx_hamqth":
+                        callsign, ok, error = payload
+                        if ok:
+                            self.wsjtx_status_var.set(
+                                f"HamQTHから {callsign} の局情報を補いました"
+                            )
+                            self._refresh_history()
+                        elif error:
+                            self.wsjtx_status_var.set(
+                                f"{callsign} のHamQTH照会に失敗しました"
+                            )
                     elif event == "wsjtx_status":
                         text, is_error = payload
                         self.wsjtx_status_var.set(text)
@@ -4586,11 +4597,48 @@ class VoiceLoggerApp:
         except Exception as exc:
             self.wsjtx_status_var.set(f"UDPログの保存に失敗しました: {exc}")
             return
-        if not result.inserted:
+        if not result.inserted or result.qso_id is None:
             return
         provider = result.provider or "WSJT-X/JTDX"
-        self.wsjtx_status_var.set(f"{provider} から {result.callsign} を取り込みました")
+        if self._has_hamqth_credentials():
+            self.wsjtx_status_var.set(
+                f"{provider} から {result.callsign} を取り込みました。HamQTHを照会しています"
+            )
+            threading.Thread(
+                target=self._enrich_wsjtx_qso_from_hamqth,
+                args=(result.qso_id, result.callsign),
+                daemon=True,
+            ).start()
+        else:
+            self.wsjtx_status_var.set(
+                f"{provider} から {result.callsign} を取り込みました"
+            )
         self._refresh_history()
+
+    def _enrich_wsjtx_qso_from_hamqth(self, qso_id: int, callsign: str) -> None:
+        """Fill one stored WSJT-X/JTDX row from HamQTH. Never replaces its grid."""
+        try:
+            username, password = load_hamqth_credentials()
+        except CallbookError:
+            return
+        try:
+            client = self.hamqth_client
+            if (
+                client is None
+                or client.username != username
+                or client.password != password
+            ):
+                client = HamQTHClient(username, password)
+                self.hamqth_client = client
+            info = client.lookup(callsign)
+            apply_hamqth_to_qso(self.store, qso_id, info)
+            self.events.put(("wsjtx_hamqth", (callsign, True, "")))
+        except CallbookError as exc:
+            self.events.put(("wsjtx_hamqth", (callsign, False, str(exc))))
+        except Exception:
+            self.events.put(
+                ("wsjtx_hamqth", (callsign, False, "HamQTH照会に失敗しました。"))
+            )
 
     def _show_wsjtx_bind_error(self, message: str) -> None:
         if self.close_requested or self._wsjtx_error_shown != message:

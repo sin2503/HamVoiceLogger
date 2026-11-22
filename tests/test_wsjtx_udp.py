@@ -12,8 +12,10 @@ from pathlib import Path
 from log_store import LogStore
 from wsjtx_udp import (
     WsjtxUdpListener,
+    apply_hamqth_to_qso,
     ingest_logged_qso,
     logged_qsos_from_datagram,
+    merge_hamqth_record,
 )
 
 
@@ -161,6 +163,78 @@ class WsjtxUdpTests(unittest.TestCase):
             self.assertEqual(row["callsign"], "JA1YAA")
             self.assertEqual(row["frequency"], "14.074")
             self.assertEqual(row["lookup_provider"], "JTDX")
+
+    def test_hamqth_fill_keeps_wsjtx_grid(self) -> None:
+        existing = {
+            "callsign": "JA1YAA",
+            "operator_name": "Taro",
+            "qth": "",
+            "country": "",
+            "dxcc": "",
+            "gridsquare": "PM95",
+            "cq_zone": "",
+            "itu_zone": "",
+            "dxcc_details": "",
+            "continent": "",
+            "lookup_provider": "WSJT-X",
+            "lookup_at": "",
+        }
+        hamqth = {
+            "operator_name": "Other",
+            "qth": "Tokyo",
+            "country": "Japan",
+            "dxcc": "339",
+            "gridsquare": "PM96",
+            "cq_zone": "25",
+            "itu_zone": "45",
+            "dxcc_details": "Japan",
+            "continent": "AS",
+            "lookup_at": "2026-11-22T02:00:00+00:00",
+        }
+        merged = merge_hamqth_record(existing, hamqth)
+        self.assertEqual(merged["gridsquare"], "PM95")
+        self.assertEqual(merged["operator_name"], "Taro")
+        self.assertEqual(merged["qth"], "Tokyo")
+        self.assertEqual(merged["country"], "Japan")
+        self.assertEqual(merged["dxcc"], "339")
+        self.assertEqual(merged["lookup_provider"], "WSJT-X + HamQTH")
+
+    def test_hamqth_grid_fills_only_when_wsjtx_grid_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = LogStore(Path(tmp) / "logger.sqlite3")
+            qso_id = store.add_completed_qso(
+                {
+                    "callsign": "W1AW",
+                    "started_at": "2026-11-22T00:00:00+00:00",
+                    "ended_at": "2026-11-22T00:01:00+00:00",
+                    "frequency": "14.074000",
+                    "mode": "FT8",
+                    "gridsquare": "",
+                    "lookup_provider": "WSJT-X",
+                }
+            )
+            applied = apply_hamqth_to_qso(
+                store,
+                qso_id,
+                {
+                    "operator_name": "Hiram",
+                    "qth": "Newington",
+                    "country": "United States",
+                    "dxcc": "291",
+                    "gridsquare": "FN31",
+                    "cq_zone": "5",
+                    "itu_zone": "8",
+                    "continent": "NA",
+                    "lookup_at": "2026-11-22T00:02:00+00:00",
+                },
+            )
+            self.assertTrue(applied)
+            row = store.get_qso(qso_id)
+            assert row is not None
+            self.assertEqual(row["gridsquare"], "FN31")
+            self.assertEqual(row["operator_name"], "Hiram")
+            self.assertEqual(row["frequency"], "14.074000")
+            self.assertEqual(row["lookup_provider"], "WSJT-X + HamQTH")
 
     def test_listener_loopback(self) -> None:
         found: list[dict[str, object]] = []

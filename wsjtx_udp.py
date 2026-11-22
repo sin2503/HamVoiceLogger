@@ -32,6 +32,7 @@ class IngestResult:
     duplicate: bool
     callsign: str
     provider: str
+    qso_id: int | None = None
 
 
 def program_id_from_adif(text: str) -> str:
@@ -68,8 +69,55 @@ def ingest_logged_qso(store: LogStore, qso: dict[str, Any]) -> IngestResult:
     record["lookup_provider"] = provider
     if store.find_qso_id(callsign, started_at, record["frequency"], mode) is not None:
         return IngestResult(False, True, callsign.strip().upper(), provider)
-    store.add_completed_qso(record)
-    return IngestResult(True, False, callsign.strip().upper(), provider)
+    qso_id = store.add_completed_qso(record)
+    return IngestResult(True, False, callsign.strip().upper(), provider, qso_id)
+
+
+_CALLBOOK_FILL_FIELDS = (
+    "operator_name",
+    "qth",
+    "country",
+    "dxcc",
+    "cq_zone",
+    "itu_zone",
+    "dxcc_details",
+    "continent",
+)
+
+
+def merge_hamqth_record(
+    existing: dict[str, Any], hamqth: dict[str, Any]
+) -> dict[str, Any]:
+    """Fill empty station fields from HamQTH and keep a grid already on the row."""
+    merged = dict(existing)
+    for key in _CALLBOOK_FILL_FIELDS:
+        if str(merged.get(key) or "").strip():
+            continue
+        value = str(hamqth.get(key) or "").strip()
+        if value:
+            merged[key] = value
+    if not str(merged.get("gridsquare") or "").strip():
+        grid = str(hamqth.get("gridsquare") or "").strip()
+        if grid:
+            merged["gridsquare"] = grid
+    looked_up_at = str(hamqth.get("lookup_at") or "").strip()
+    if looked_up_at:
+        merged["lookup_at"] = looked_up_at
+    provider = str(merged.get("lookup_provider") or "").strip()
+    if "HamQTH" not in provider:
+        merged["lookup_provider"] = f"{provider} + HamQTH" if provider else "HamQTH"
+    return merged
+
+
+def apply_hamqth_to_qso(
+    store: LogStore, qso_id: int, hamqth: dict[str, Any]
+) -> bool:
+    """Write a HamQTH lookup onto one stored QSO. The WSJT-X grid stays."""
+    existing = store.get_qso(qso_id)
+    if existing is None:
+        return False
+    store.update_qso(qso_id, merge_hamqth_record(existing, hamqth))
+    return True
 
 
 class WsjtxUdpListener:
