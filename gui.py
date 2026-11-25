@@ -27,7 +27,13 @@ from adif_import import import_adif
 from hamlog_csv_export import export_hamlog_csv
 from hamlog_csv_import import import_hamlog_csv
 from jcc_jcg import lookup_station_code, normalize_station_code, search_station_codes
-from qso_calendar import counts_for_month, jst_date_of, month_weeks, shift_month
+from qso_calendar import (
+    counts_for_month,
+    format_report_summary,
+    jst_date_of,
+    month_weeks,
+    shift_month,
+)
 from wsjtx_udp import WsjtxUdpListener, apply_hamqth_to_qso, ingest_logged_qso
 from time_format import (
     JST,
@@ -1761,6 +1767,12 @@ class VoiceLoggerApp:
             wraplength=230,
             justify="left",
         ).pack(anchor="w", pady=(6, 0))
+        self.history_cal_report_var = tk.StringVar(value="相手レポート\n全体 ＋0　ー0\n—")
+        ttk.Label(
+            calendar_frame,
+            textvariable=self.history_cal_report_var,
+            justify="left",
+        ).pack(anchor="w", pady=(8, 0))
 
         columns = (
             "select",
@@ -4241,16 +4253,15 @@ class VoiceLoggerApp:
         ]
         return matched[:limit]
 
-    def _history_mark_counts(self) -> dict[int, int]:
+    def _history_report_samples(self) -> list[tuple[str, str]]:
         query = self.history_search_var.get() if hasattr(self, "history_search_var") else ""
         kwargs = self._history_filter_kwargs()
-        started = self.store.started_at_values(
+        return self.store.received_report_rows(
             query,
             mode=kwargs["mode"],
             dx_only=kwargs["dx_only"],
             qsl=kwargs["qsl"],
         )
-        return counts_for_month(started, self._history_cal_year, self._history_cal_month)
 
     def _paint_history_calendar(self) -> None:
         if not hasattr(self, "history_cal_grid"):
@@ -4270,7 +4281,12 @@ class VoiceLoggerApp:
         self.history_cal_clear_button.configure(
             state="normal" if selected is not None else "disabled"
         )
-        counts = self._history_mark_counts()
+        samples = self._history_report_samples()
+        counts = counts_for_month(
+            [started for started, _report in samples], year, month
+        )
+        if hasattr(self, "history_cal_report_var"):
+            self.history_cal_report_var.set(format_report_summary(samples, year, month))
         for child in self.history_cal_grid.winfo_children():
             child.destroy()
         today = datetime.now(JST).date()

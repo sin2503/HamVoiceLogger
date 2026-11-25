@@ -8,7 +8,15 @@ from datetime import date
 from pathlib import Path
 
 from log_store import LogStore
-from qso_calendar import counts_for_month, jst_date_of, month_weeks, shift_month
+from qso_calendar import (
+    counts_for_month,
+    format_report_summary,
+    jst_date_of,
+    month_weeks,
+    received_report_sign,
+    report_sign_counts,
+    shift_month,
+)
 
 
 class QsoCalendarTests(unittest.TestCase):
@@ -55,6 +63,27 @@ class QsoCalendarTests(unittest.TestCase):
             self.assertEqual(counts, {21: 1})
             fm = store.started_at_values(mode="FM")
             self.assertEqual(fm, [])
+
+    def test_report_sign_ignores_rst_and_keeps_ft8_sign(self) -> None:
+        self.assertEqual(received_report_sign("+02"), "+")
+        self.assertEqual(received_report_sign("＋10"), "+")
+        self.assertEqual(received_report_sign("-12"), "-")
+        self.assertEqual(received_report_sign("−08"), "-")
+        self.assertEqual(received_report_sign("59"), "")
+        self.assertEqual(received_report_sign(""), "")
+
+    def test_report_summary_splits_overall_and_jst_month(self) -> None:
+        samples = [
+            ("2026-11-20T12:00:00+09:00", "+02"),
+            ("2026-11-20T15:30:00+00:00", "-10"),  # 2026-11-21 JST
+            ("2026-10-01T00:00:00+09:00", "-15"),
+            ("2026-11-02T00:00:00+09:00", "59"),
+        ]
+        self.assertEqual(report_sign_counts(samples), (1, 2))
+        self.assertEqual(report_sign_counts(samples, year=2026, month=11), (1, 1))
+        summary = format_report_summary(samples, 2026, 11)
+        self.assertIn("全体 ＋1（33%）　ー2（67%）", summary)
+        self.assertIn("11月 ＋1（50%）　ー1（50%）", summary)
 
 
 if __name__ == "__main__":

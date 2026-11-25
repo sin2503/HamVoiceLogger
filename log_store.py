@@ -639,6 +639,37 @@ class LogStore:
             ).fetchall()
         return [str(row["started_at"] or "") for row in rows]
 
+    def received_report_rows(
+        self,
+        query: str = "",
+        *,
+        mode: str = "",
+        dx_only: bool = False,
+        qsl: str = "",
+        date_from: str = "",
+        date_to: str = "",
+    ) -> list[tuple[str, str]]:
+        """Start time and the other station's report for the history filters."""
+        where_sql, params = _qso_where(
+            query,
+            mode=mode,
+            dx_only=dx_only,
+            qsl=qsl,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""SELECT started_at, received_report FROM qso_logs
+                    {where_sql}
+                    ORDER BY started_at DESC""",
+                params,
+            ).fetchall()
+        return [
+            (str(row["started_at"] or ""), str(row["received_report"] or ""))
+            for row in rows
+        ]
+
     def recent_candidates(self, query: str = "", limit: int = 100) -> list[dict[str, Any]]:
         pattern = f"%{query.strip()}%"
         with self._connect() as connection:

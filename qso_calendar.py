@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from calendar import Calendar
 from datetime import date
 
@@ -41,3 +42,61 @@ def counts_for_month(
             continue
         counts[day.day] = counts.get(day.day, 0) + 1
     return counts
+
+
+def received_report_sign(value: str | None) -> str:
+    """Return ``+`` or ``-`` when the other station's report has that sign."""
+    text = unicodedata.normalize("NFKC", str(value or "")).strip()
+    text = text.replace("−", "-").replace("–", "-")
+    if not text:
+        return ""
+    if text[0] == "+":
+        return "+"
+    if text[0] == "-":
+        return "-"
+    return ""
+
+
+def report_sign_counts(
+    samples: list[tuple[str, str]],
+    *,
+    year: int | None = None,
+    month: int | None = None,
+) -> tuple[int, int]:
+    """Count plus and minus received reports. Optional year/month use JST dates."""
+    plus = 0
+    minus = 0
+    for started_at, report in samples:
+        if year is not None and month is not None:
+            day = jst_date_of(started_at)
+            if day is None or day.year != year or day.month != month:
+                continue
+        sign = received_report_sign(report)
+        if sign == "+":
+            plus += 1
+        elif sign == "-":
+            minus += 1
+    return plus, minus
+
+
+def format_report_balance(plus: int, minus: int) -> str:
+    """Counts, and each share of the signed reports."""
+    total = plus + minus
+    if total == 0:
+        return "＋0　ー0"
+    plus_pct = round(plus * 100 / total)
+    minus_pct = 100 - plus_pct
+    return f"＋{plus}（{plus_pct}%）　ー{minus}（{minus_pct}%）"
+
+
+def format_report_summary(
+    samples: list[tuple[str, str]], year: int, month: int
+) -> str:
+    """Overall balance, then the balance for one JST month."""
+    overall = report_sign_counts(samples)
+    month_counts = report_sign_counts(samples, year=year, month=month)
+    return (
+        "相手レポート\n"
+        f"全体 {format_report_balance(*overall)}\n"
+        f"{month}月 {format_report_balance(*month_counts)}"
+    )
