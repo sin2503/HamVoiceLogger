@@ -18,9 +18,12 @@ from tkcalendar import Calendar
 from audio_monitor import (
     AudioMonitor,
     format_audio_error,
+    level_fraction,
     list_input_devices,
+    normalize_segment,
     refresh_audio_host,
     resolve_input_device,
+    rms_from_fraction,
 )
 from adif_export import export_adif, export_adx
 from adif_import import import_adif
@@ -181,14 +184,16 @@ def nudge_report_value(value: str, delta: int) -> str:
 
 _HELP_THRESHOLD = (
     "音量しきい値（RMS）\n"
-    "マイク音量がこの値を超えると「発話開始」とみなします。\n"
+    "入力レベルがこの値を超え、バーが赤い線より右へ出ると取り込みを始めます。\n"
+    "バーが動くだけでは文字起こしません。無線機のUSB音声は小さめなので、\n"
+    "線を超えないときは値を下げます。入力レベルの赤い線を左右へドラッグしても変えられます。\n"
     "小さいほど敏感で雑音も拾いやすく、大きいほど大きな音だけを切り出します。\n"
-    "目安: 0.02 前後"
+    "目安: マイクは 0.02 前後、USB音声は 0.005 前後"
 )
 _HELP_SILENCE = (
     "無音終了（秒）\n"
-    "発話開始後、音量がしきい値未満のままこの秒数続くと発話終了として切り出し、\n"
-    "文字起こしに回します。\n"
+    "取り込み開始後、音量がしきい値未満のままこの秒数続くと区切って文字起こしします。\n"
+    "無線機の受信音が途切れないときは、12秒ごとに区切ります。\n"
     "短いと一文が途切れやすく、長いと反応が遅くなります。\n"
     "目安: 1.0 秒"
 )
@@ -546,6 +551,7 @@ class RecognitionWorker(threading.Thread):
         self.threshold = threshold
         self.silence_duration = silence_duration
         self.device = device
+        self.monitor: AudioMonitor | None = None
 
     def run(self) -> None:
         monitor: AudioMonitor | None = None
@@ -574,9 +580,13 @@ class RecognitionWorker(threading.Thread):
                 threshold=self.threshold,
                 silence_duration=self.silence_duration,
                 device=self.device,
+                on_level=lambda level, recording: self.events.put(
+                    ("level", (level, recording))
+                ),
             )
+            self.monitor = monitor
             monitor.start()
-            self.events.put(("status", "認識中 · マイクを監視中"))
+            self.events.put(("status", "認識中 · 入力を監視中"))
             while not self.stop_event.is_set():
                 try:
                     audio = monitor.get_segment(timeout=0.25)
@@ -589,7 +599,9 @@ class RecognitionWorker(threading.Thread):
                 self.events.put(
                     ("status", f"認識中 · 文字起こし中（{duration:.1f}秒）")
                 )
-                text = decoder.transcribe(audio, sample_rate=monitor.sample_rate)
+                text = decoder.transcribe(
+                    normalize_segment(audio), sample_rate=monitor.sample_rate
+                )
                 if self.stop_event.is_set():
                     break
                 if text:
@@ -604,7 +616,7 @@ class RecognitionWorker(threading.Thread):
                             },
                         )
                     )
-                self.events.put(("status", "認識中 · マイクを監視中"))
+                self.events.put(("status", "認識中 · 入力を監視中"))
         except Exception as exc:
             self.events.put(("error", format_audio_error(exc)))
         finally:
@@ -613,6 +625,8 @@ class RecognitionWorker(threading.Thread):
                     monitor.stop()
                 except Exception:
                     pass
+            self.monitor = None
+            self.events.put(("level", None))
             self.events.put(("stopped", None))
 
 
@@ -1073,6 +1087,40 @@ class VoiceLoggerApp:
         )
         self.silence_spin.grid(row=0, column=5, sticky="w")
         self.silence_var.trace_add("write", self._schedule_persist_settings)
+
+        level_row = ttk.Frame(settings)
+        level_row.grid(
+            row=1, column=4, columnspan=3, sticky="ew", padx=(18, 0), pady=(10, 0)
+        )
+        level_row.columnconfigure(1, weight=1)
+        level_label = ttk.Label(level_row, text="入力レベル")
+        level_label.grid(row=0, column=0, padx=(0, 8), sticky="w")
+        HoverTip(
+            level_label,
+            "選択中の入力デバイスの音量です。赤い線は音量しきい値で、"
+            "左右にドラッグして変えられます。線を超えた音を取り込み、"
+            "無音が続くか12秒たつと文字起こしします。",
+        )
+        self._input_level: float | None = None
+        self._input_recording = False
+        self.level_state_var = tk.StringVar(value="停止中")
+        self.level_canvas = tk.Canvas(
+            level_row,
+            height=16,
+            highlightthickness=0,
+            background="#edf2ef",
+        )
+        self.level_canvas.grid(row=0, column=1, sticky="ew")
+        self.level_canvas.configure(cursor="sb_h_double_arrow")
+        self.level_canvas.bind("<Configure>", lambda _event: self._paint_input_level())
+        self.level_canvas.bind("<ButtonPress-1>", self._drag_input_threshold)
+        self.level_canvas.bind("<B1-Motion>", self._drag_input_threshold)
+        ttk.Label(
+            level_row,
+            textvariable=self.level_state_var,
+            style="Muted.TLabel",
+            width=12,
+        ).grid(row=0, column=2, padx=(8, 0), sticky="w")
 
         self._add_help_marker(
             settings,
@@ -3215,6 +3263,56 @@ class VoiceLoggerApp:
         self._pending_error_dialog = None
         messagebox.showerror("音声認識エラー", message, parent=self.root)
 
+    def _paint_input_level(self) -> None:
+        canvas = getattr(self, "level_canvas", None)
+        if canvas is None:
+            return
+        canvas.delete("all")
+        width = max(int(canvas.winfo_width()), 2)
+        height = max(int(canvas.winfo_height()), 2)
+        canvas.create_rectangle(0, 2, width, height - 2, fill="#d7e2dd", outline="")
+        try:
+            threshold = float(self.threshold_var.get())
+        except (TypeError, ValueError):
+            threshold = 0.02
+        level = self._input_level
+        if level is None:
+            self.level_state_var.set("停止中")
+            self._draw_threshold_mark(width, height, threshold)
+            return
+        if self._input_recording:
+            self.level_state_var.set("取り込み中")
+        elif level >= threshold:
+            self.level_state_var.set("しきい値以上")
+        else:
+            self.level_state_var.set("しきい値未満")
+        fill_w = int(width * level_fraction(max(level, 0.0)))
+        if fill_w > 0:
+            color = "#146b58" if level >= threshold else "#8aaba0"
+            canvas.create_rectangle(0, 2, fill_w, height - 2, fill=color, outline="")
+        self._draw_threshold_mark(width, height, threshold)
+
+    def _draw_threshold_mark(self, width: int, height: int, threshold: float) -> None:
+        canvas = self.level_canvas
+        mark = int(width * level_fraction(max(threshold, 0.0)))
+        mark = min(max(mark, 0), width - 1)
+        canvas.create_line(mark, 0, mark, height, fill="#b44d3b", width=2)
+
+    def _drag_input_threshold(self, event: tk.Event) -> None:
+        width = max(int(self.level_canvas.winfo_width()), 2)
+        fraction = min(1.0, max(0.0, float(event.x) / width))
+        rms = min(0.5, max(0.001, rms_from_fraction(fraction)))
+        text = f"{rms:.3f}".rstrip("0").rstrip(".")
+        if self.threshold_var.get() != text:
+            self.threshold_var.set(text)
+        worker = self.worker
+        if worker is not None:
+            worker.threshold = rms
+            monitor = worker.monitor
+            if monitor is not None:
+                monitor.threshold = rms
+        self._paint_input_level()
+
     def _poll_events(self) -> None:
         if self._poll_busy:
             self.root.after(100, self._poll_events)
@@ -3222,6 +3320,9 @@ class VoiceLoggerApp:
         self._poll_busy = True
         recognition_error: str | None = None
         saw_stopped = False
+        level_update = False
+        level_value: float | None = None
+        level_recording = False
         try:
             try:
                 while True:
@@ -3269,6 +3370,14 @@ class VoiceLoggerApp:
                             self.root.after_idle(
                                 lambda msg=text: self._show_wsjtx_bind_error(msg)
                             )
+                    elif event == "level":
+                        level_update = True
+                        if payload is None:
+                            level_value = None
+                            level_recording = False
+                        else:
+                            level_value = float(payload[0])
+                            level_recording = bool(payload[1])
                     elif event == "stopped":
                         saw_stopped = True
             except queue.Empty:
@@ -3282,6 +3391,11 @@ class VoiceLoggerApp:
                 self.root.after_idle(
                     lambda msg=recognition_error: self._show_recognition_error_dialog(msg)
                 )
+
+            if level_update:
+                self._input_level = level_value
+                self._input_recording = level_recording
+                self._paint_input_level()
 
             if saw_stopped:
                 self.status_var.set(
@@ -3391,7 +3505,7 @@ class VoiceLoggerApp:
         self.candidate_popup.clear()
         # Clear is display-only; recognition keeps running if the worker is alive.
         if self.worker is not None and self.worker.is_alive():
-            self.status_var.set("認識中 · マイクを監視中（表示をクリアしました）")
+            self.status_var.set("認識中 · 入力を監視中（表示をクリアしました）")
         else:
             self.status_var.set("画面表示をクリアしました。保存済み履歴は保持されています")
 

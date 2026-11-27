@@ -2,11 +2,42 @@
 
 from __future__ import annotations
 
+import math
+import time
+from collections.abc import Callable
 from queue import Queue
 from threading import Lock
 from typing import Any
 
 import numpy as np
+
+
+def normalize_segment(audio: np.ndarray, target_peak: float = 0.5) -> np.ndarray:
+    """Lift a quiet segment toward ``target_peak`` without boosting silence."""
+    waveform = np.asarray(audio, dtype=np.float32)
+    if waveform.size == 0 or target_peak <= 0:
+        return waveform
+    peak = float(np.max(np.abs(waveform)))
+    if peak < 1e-4 or peak >= target_peak:
+        return waveform
+    return np.clip(waveform * (target_peak / peak), -1.0, 1.0)
+
+
+def level_fraction(rms: float, floor_db: float = -60.0) -> float:
+    """Map an RMS level to 0..1. ``floor_db`` is the left edge of the meter."""
+    if rms <= 1e-8 or floor_db >= 0:
+        return 0.0
+    db = 20.0 * math.log10(min(float(rms), 1.0))
+    return max(0.0, min(1.0, (db - floor_db) / -floor_db))
+
+
+def rms_from_fraction(fraction: float, floor_db: float = -60.0) -> float:
+    """Inverse of :func:`level_fraction`."""
+    if floor_db >= 0:
+        return 0.0
+    fraction = max(0.0, min(1.0, float(fraction)))
+    db = floor_db - fraction * floor_db
+    return 10 ** (db / 20.0)
 
 
 def refresh_audio_host() -> None:
@@ -144,6 +175,10 @@ class AudioMonitor:
         sample_rate: int = 16_000,
         channels: int = 1,
         device: int | str | None = None,
+        on_level: Callable[[float, bool], None] | None = None,
+        level_interval: float = 0.08,
+        max_segment_duration: float = 12.0,
+        blocksize: int = 800,
     ) -> None:
         if threshold < 0:
             raise ValueError("threshold must be non-negative")
@@ -151,17 +186,27 @@ class AudioMonitor:
             raise ValueError("silence_duration must be positive")
         if sample_rate <= 0 or channels <= 0:
             raise ValueError("sample_rate and channels must be positive")
+        if max_segment_duration <= 0:
+            raise ValueError("max_segment_duration must be positive")
+        if blocksize <= 0:
+            raise ValueError("blocksize must be positive")
 
         self.threshold = threshold
         self.silence_duration = silence_duration
         self.sample_rate = sample_rate
         self.channels = channels
         self.device = device
+        self.on_level = on_level
+        self.level_interval = level_interval
+        self.max_segment_duration = max_segment_duration
+        self.blocksize = blocksize
 
         self._segments: Queue[np.ndarray] = Queue()
+        self._last_level_at = 0.0
         self._lock = Lock()
         self._recording = False
         self._silence_elapsed = 0.0
+        self._segment_samples = 0
         self._frames: list[np.ndarray] = []
         self._stream: Any | None = None
         self._callback_error: BaseException | None = None
@@ -188,6 +233,7 @@ class AudioMonitor:
                 channels=self.channels,
                 device=self.device,
                 dtype="float32",
+                blocksize=self.blocksize,
                 callback=self._audio_callback,
             )
         except Exception as exc:
@@ -239,29 +285,50 @@ class AudioMonitor:
         if audio.shape[0] == 0:
             return
         audio = audio.copy()
-
+        volume = float(np.sqrt(np.mean(np.square(audio))))
         completed_segment = None
+        recording = False
         with self._lock:
-            volume = float(np.sqrt(np.mean(np.square(audio))))
             if not self._recording:
-                if volume < self.threshold:
-                    return
-                self._recording = True
-                self._frames = [audio]
-                self._silence_elapsed = 0.0
-                return
-
-            self._frames.append(audio)
-            if volume < self.threshold:
-                self._silence_elapsed += audio.shape[0] / self.sample_rate
-                if self._silence_elapsed >= self.silence_duration:
-                    completed_segment = np.concatenate(self._frames, axis=0)
-                    self._reset_segment()
+                if volume >= self.threshold:
+                    self._recording = True
+                    self._frames = [audio]
+                    self._silence_elapsed = 0.0
+                    self._segment_samples = audio.shape[0]
             else:
-                self._silence_elapsed = 0.0
+                self._frames.append(audio)
+                self._segment_samples += audio.shape[0]
+                frame_seconds = audio.shape[0] / self.sample_rate
+                if volume < self.threshold:
+                    self._silence_elapsed += frame_seconds
+                else:
+                    self._silence_elapsed = 0.0
+            recording = self._recording
+            segment_seconds = self._segment_samples / self.sample_rate
+            if self._recording and (
+                self._silence_elapsed >= self.silence_duration
+                or segment_seconds >= self.max_segment_duration
+            ):
+                completed_segment = np.concatenate(self._frames, axis=0)
+                self._reset_segment()
+                recording = False
 
+        self._publish_level(volume, recording)
         if completed_segment is not None:
             self._segments.put(completed_segment)
+
+    def _publish_level(self, rms: float, recording: bool) -> None:
+        callback = self.on_level
+        if callback is None:
+            return
+        now = time.monotonic()
+        if now - self._last_level_at < self.level_interval:
+            return
+        self._last_level_at = now
+        try:
+            callback(float(rms), recording)
+        except Exception:
+            return
 
     def _audio_callback(
         self,
@@ -278,6 +345,7 @@ class AudioMonitor:
     def _reset_segment(self) -> None:
         self._recording = False
         self._silence_elapsed = 0.0
+        self._segment_samples = 0
         self._frames = []
 
     def __enter__(self) -> AudioMonitor:

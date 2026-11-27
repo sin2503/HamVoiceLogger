@@ -71,7 +71,7 @@ Callsign extraction is Japan-oriented: prefix `[7-9JQMS]`, total length 6–7, m
 - `main.py`: GUI by default; `--cli` selects the terminal interface.
 - `gui.py`: Tkinter UI, worker-thread recognition, manual callbook lookup, QSO editing/history, and ADIF export controls.
 - `app_settings.py`: JSON persistence for GUI preferences and window geometry.
-- `audio_monitor.py`: microphone capture and RMS/silence-based segmentation.
+- `audio_monitor.py`: input-device capture and RMS/silence-based segmentation. While recognition is running, the GUI draws that level under the silence setting. The red mark is the RMS threshold and can be dragged to change it, including while recognition is running. Audio left of it is not transcribed. A segment also closes after 12 seconds if the radio audio never falls quiet, and quiet segments are peak-normalized before recognition.
 - `decoder.py`: multi-engine local transcription and model download catalog.
 - `callsign_extractor.py`: direct and phonetic callsign extraction plus partial decoding.
 - `callbook.py`: HamQTH public DXCC JSON lookup, authenticated XML lookup, and keyring helpers.
