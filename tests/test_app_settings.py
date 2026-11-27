@@ -15,9 +15,11 @@ from app_settings import (
     match_device_label,
     normalize_freq_mode_presets,
     normalize_report_presets,
+    normalize_transcript_suppressions,
     parse_geometry,
     parse_report_preset,
     save_settings,
+    transcript_is_suppressed,
 )
 
 
@@ -112,6 +114,33 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(parse_report_preset("59/57"), ("59", "57"))
         self.assertEqual(parse_report_preset("599"), ("599", "599"))
         self.assertEqual(normalize_report_presets(["59/59", "bad", "59/59"]), ["59/59"])
+
+    def test_transcript_suppression_is_exact(self) -> None:
+        phrases = normalize_transcript_suppressions(
+            ["  ご視聴ありがとうございました  ", "", "ご視聴ありがとうございました", "別の文"]
+        )
+        self.assertEqual(phrases, ["ご視聴ありがとうございました", "別の文"])
+        self.assertTrue(
+            transcript_is_suppressed("ご視聴ありがとうございました", phrases)
+        )
+        self.assertFalse(
+            transcript_is_suppressed("ご視聴ありがとうございました。", phrases)
+        )
+        self.assertFalse(
+            transcript_is_suppressed("一部解説: ご視聴ありがとうございました", phrases)
+        )
+
+    def test_transcript_suppressions_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            original = AppSettings(
+                transcript_suppressions=["ご視聴ありがとうございました"]
+            )
+            save_settings(original, path)
+            loaded = load_settings(path)
+            self.assertEqual(
+                loaded.transcript_suppressions, ["ご視聴ありがとうございました"]
+            )
 
 
 if __name__ == "__main__":

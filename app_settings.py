@@ -86,6 +86,7 @@ class AppSettings:
     wsjtx_udp_host: str = DEFAULT_WSJTX_UDP_HOST
     wsjtx_udp_port: int = DEFAULT_WSJTX_UDP_PORT
     wsjtx_udp_multicast: str = ""
+    transcript_suppressions: list[str] = field(default_factory=list)
 
 
 def settings_path() -> Path:
@@ -106,6 +107,29 @@ def _as_float(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def normalize_transcript_suppressions(value: Any) -> list[str]:
+    """Keep non-empty phrases, in order, without duplicates."""
+    if not isinstance(value, list):
+        return []
+    seen: set[str] = set()
+    phrases: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        phrases.append(text)
+    return phrases
+
+
+def transcript_is_suppressed(text: str, phrases: list[str]) -> bool:
+    """True when the whole transcript equals one registered phrase."""
+    target = str(text or "").strip()
+    if not target:
+        return False
+    return target in set(normalize_transcript_suppressions(phrases))
 
 
 def normalize_wsjtx_udp_host(value: Any) -> str:
@@ -336,6 +360,9 @@ def load_settings(path: Path | None = None) -> AppSettings:
         wsjtx_udp_port=normalize_wsjtx_udp_port(raw.get("wsjtx_udp_port")),
         wsjtx_udp_multicast=normalize_wsjtx_udp_multicast(
             raw.get("wsjtx_udp_multicast")
+        ),
+        transcript_suppressions=normalize_transcript_suppressions(
+            raw.get("transcript_suppressions")
         ),
     )
 

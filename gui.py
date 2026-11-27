@@ -57,12 +57,14 @@ from app_settings import (
     normalize_qsl_received_label,
     normalize_qsl_sent_label,
     normalize_report_presets,
+    normalize_transcript_suppressions,
     normalize_wsjtx_udp_host,
     normalize_wsjtx_udp_multicast,
     normalize_wsjtx_udp_port,
     parse_geometry,
     parse_report_preset,
     save_settings,
+    transcript_is_suppressed,
 )
 from callbook import (
     CallbookError,
@@ -2026,14 +2028,17 @@ class VoiceLoggerApp:
         model_tab = ttk.Frame(notebook, padding=12)
         callbook_tab = ttk.Frame(notebook, padding=12)
         preset_tab = ttk.Frame(notebook, padding=12)
+        suppress_tab = ttk.Frame(notebook, padding=12)
         wsjtx_tab = ttk.Frame(notebook, padding=12)
         notebook.add(model_tab, text="認識モデル")
         notebook.add(callbook_tab, text="HamQTH")
         notebook.add(preset_tab, text="QSOプリセット")
+        notebook.add(suppress_tab, text="除外語句")
         notebook.add(wsjtx_tab, text="WSJT-X")
         self._build_model_settings_tab(model_tab, window)
         self._build_callbook_settings_tab(callbook_tab, window)
         self._build_preset_settings_tab(preset_tab, window)
+        self._build_suppression_settings_tab(suppress_tab)
         self._build_wsjtx_settings_tab(wsjtx_tab, window)
         window.grab_set()
 
@@ -2043,6 +2048,129 @@ class VoiceLoggerApp:
             self._settings_window.destroy()
         self._settings_window = None
         self._model_settings_ui = None
+
+    def _build_suppression_settings_tab(self, tab: ttk.Frame) -> None:
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(1, weight=1)
+        ttk.Label(
+            tab,
+            text=(
+                "文字起こし全文が登録した語句と完全に一致したとき、"
+                "文字起こし欄と候補ポップアップには出しません。"
+                "句読点の違いも別の語句です。"
+            ),
+            style="Muted.TLabel",
+            wraplength=480,
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 8))
+
+        list_frame = ttk.Frame(tab)
+        list_frame.grid(row=1, column=0, sticky="nsew")
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+        phrases = tk.Listbox(list_frame, height=10, activestyle="dotbox")
+        phrases.grid(row=0, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(list_frame, orient="vertical", command=phrases.yview)
+        scroll.grid(row=0, column=1, sticky="ns")
+        phrases.configure(yscrollcommand=scroll.set)
+        for phrase in self.settings.transcript_suppressions:
+            phrases.insert("end", phrase)
+
+        entry_var = tk.StringVar()
+        status_var = tk.StringVar(value="")
+        entry = ttk.Entry(tab, textvariable=entry_var)
+        entry.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+
+        def selected_index() -> int | None:
+            picked = phrases.curselection()
+            if not picked:
+                return None
+            return int(picked[0])
+
+        def remember(message: str) -> None:
+            current = [
+                str(phrases.get(index)) for index in range(phrases.size())
+            ]
+            self.settings.transcript_suppressions = normalize_transcript_suppressions(
+                current
+            )
+            self._persist_settings()
+            status_var.set(message)
+
+        def add_phrase() -> None:
+            text = entry_var.get().strip()
+            if not text:
+                status_var.set("語句を入力してください")
+                return
+            existing = [str(phrases.get(index)) for index in range(phrases.size())]
+            if text in existing:
+                phrases.selection_clear(0, "end")
+                phrases.selection_set(existing.index(text))
+                phrases.see(existing.index(text))
+                status_var.set("同じ語句が既にあります")
+                return
+            phrases.insert("end", text)
+            phrases.selection_clear(0, "end")
+            phrases.selection_set("end")
+            phrases.see("end")
+            entry_var.set("")
+            remember("追加しました")
+
+        entry.bind("<Return>", lambda _event: add_phrase())
+
+        def replace_phrase() -> None:
+            index = selected_index()
+            if index is None:
+                status_var.set("変更する語句を選んでください")
+                return
+            text = entry_var.get().strip()
+            if not text:
+                status_var.set("語句を入力してください")
+                return
+            for other in range(phrases.size()):
+                if other != index and str(phrases.get(other)) == text:
+                    status_var.set("同じ語句が既にあります")
+                    return
+            phrases.delete(index)
+            phrases.insert(index, text)
+            phrases.selection_clear(0, "end")
+            phrases.selection_set(index)
+            phrases.see(index)
+            remember("変更しました")
+
+        def delete_phrase() -> None:
+            index = selected_index()
+            if index is None:
+                status_var.set("削除する語句を選んでください")
+                return
+            phrases.delete(index)
+            entry_var.set("")
+            if phrases.size():
+                next_index = min(index, phrases.size() - 1)
+                phrases.selection_set(next_index)
+                entry_var.set(str(phrases.get(next_index)))
+            remember("削除しました")
+
+        def load_selected(_event: tk.Event | None = None) -> None:
+            index = selected_index()
+            if index is None:
+                return
+            entry_var.set(str(phrases.get(index)))
+            status_var.set("")
+
+        phrases.bind("<<ListboxSelect>>", load_selected)
+
+        buttons = ttk.Frame(tab)
+        buttons.grid(row=3, column=0, sticky="w", pady=(8, 0))
+        ttk.Button(buttons, text="追加", command=add_phrase).pack(side="left")
+        ttk.Button(buttons, text="変更", command=replace_phrase).pack(
+            side="left", padx=(8, 0)
+        )
+        ttk.Button(buttons, text="削除", command=delete_phrase).pack(
+            side="left", padx=(8, 0)
+        )
+        ttk.Label(tab, textvariable=status_var, style="Muted.TLabel").grid(
+            row=4, column=0, sticky="w", pady=(8, 0)
+        )
 
     def _reset_model_download_progress_ui(self) -> None:
         ui = self._model_settings_ui
@@ -3457,6 +3585,8 @@ class VoiceLoggerApp:
 
     def _show_transcript(self, result: dict[str, Any]) -> None:
         text = result["text"]
+        if transcript_is_suppressed(text, self.settings.transcript_suppressions):
+            return
         callsigns = result["callsigns"]
         partial = result["partial"]
         self.transcript_text.insert("end", f"{result['time']}  {text}\n")
@@ -4908,6 +5038,9 @@ class VoiceLoggerApp:
             wsjtx_udp_port=normalize_wsjtx_udp_port(self.settings.wsjtx_udp_port),
             wsjtx_udp_multicast=normalize_wsjtx_udp_multicast(
                 self.settings.wsjtx_udp_multicast
+            ),
+            transcript_suppressions=normalize_transcript_suppressions(
+                self.settings.transcript_suppressions
             ),
         )
 
