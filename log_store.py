@@ -9,6 +9,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from time_format import parse_iso_datetime, same_instant
+
 
 def _timestamp() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
@@ -16,6 +18,17 @@ def _timestamp() -> str:
 
 def _halfwidth(value: str) -> str:
     return unicodedata.normalize("NFKC", value).strip()
+
+
+def _rows_by_start_desc(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Latest real start time first, even when offsets differ."""
+
+    def key(row: dict[str, Any]) -> tuple[float, int]:
+        moment = parse_iso_datetime(str(row.get("started_at") or ""))
+        stamp = moment.timestamp() if moment is not None else float("-inf")
+        return (stamp, int(row.get("id") or 0))
+
+    return sorted(rows, key=key, reverse=True)
 
 
 def _same_frequency(left: str, right: str) -> bool:
@@ -219,8 +232,8 @@ class LogStore:
     ) -> int | None:
         """Return an existing QSO id when callsign+start(+freq/mode) already match.
 
-        A supplied frequency matches numerically, so trailing zeros do not
-        create a second row. An empty frequency skips that check.
+        Start time matches the same moment, so ``+09:00`` and ``+00:00`` for
+        that instant are one QSO. A supplied frequency matches numerically.
         """
         normalized = _halfwidth(callsign).upper()
         if not normalized or not started_at:
@@ -229,18 +242,19 @@ class LogStore:
         wanted_mode = _halfwidth(mode)
         with self._connect() as connection:
             rows = connection.execute(
-                """SELECT id, frequency FROM qso_logs
-                   WHERE callsign = ? AND started_at = ?
+                """SELECT id, frequency, started_at FROM qso_logs
+                   WHERE callsign = ?
                      AND (? = '' OR UPPER(mode) = UPPER(?))
                    ORDER BY id DESC""",
                 (
                     normalized,
-                    started_at,
                     wanted_mode,
                     wanted_mode or "FM",
                 ),
             ).fetchall()
         for row in rows:
+            if not same_instant(started_at, str(row["started_at"] or "")):
+                continue
             if wanted_frequency == "" or _same_frequency(
                 wanted_frequency, str(row["frequency"] or "")
             ):
@@ -557,12 +571,10 @@ class LogStore:
                           received_report, sent_report, operator_name, qth,
                           gridsquare, station_code, notes, remarks2, is_dx
                    FROM qso_logs
-                   WHERE callsign = ?
-                   ORDER BY started_at DESC, id DESC
-                   LIMIT ?""",
-                (normalized, limit),
+                   WHERE callsign = ?""",
+                (normalized,),
             ).fetchall()
-        recent = [dict(row) for row in rows]
+        recent = _rows_by_start_desc([dict(row) for row in rows])[:limit]
         return {
             "callsign": normalized,
             "total": int(total),
@@ -596,7 +608,6 @@ class LogStore:
             date_from=date_from,
             date_to=date_to,
         )
-        params.append(limit)
         with self._connect() as connection:
             rows = connection.execute(
                 f"""SELECT id, started_at, ended_at, callsign, frequency, mode,
@@ -605,11 +616,13 @@ class LogStore:
                                   lookup_provider, lookup_at, station_code, qsl_sent, qsl_received,
                                   qsl_via, notes, remarks2, is_dx, is_locked
                    FROM qso_logs
-                    {where_sql}
-                    ORDER BY started_at DESC LIMIT ?""",
+                    {where_sql}""",
                 params,
             ).fetchall()
-        return [dict(row) for row in rows]
+        ordered = _rows_by_start_desc([dict(row) for row in rows])
+        if limit < 0:
+            return ordered
+        return ordered[:limit]
 
     def started_at_values(
         self,

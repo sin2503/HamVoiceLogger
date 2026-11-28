@@ -73,6 +73,53 @@ class LogStoreSearchTests(unittest.TestCase):
             started = store.started_at_values(mode="FM")
             self.assertEqual(started, ["2026-01-10T12:00:00+09:00"])
 
+    def test_search_orders_by_instant_across_offsets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = LogStore(Path(tmp) / "logger.sqlite3")
+            earlier = store.start_qso(frequency="145.000", mode="FM")
+            store.end_qso(
+                earlier,
+                callsign="JH1EARLY",
+                frequency="145.000",
+                mode="FM",
+                notes="",
+                started_at="2026-11-28T11:54:00+09:00",
+            )
+            later = store.start_qso(frequency="433.000", mode="FM")
+            store.end_qso(
+                later,
+                callsign="JH1LATER",
+                frequency="433.000",
+                mode="FM",
+                notes="",
+                started_at="2026-11-28T04:00:00+00:00",
+            )
+            rows = store.search_qsos()
+            self.assertEqual(
+                [row["callsign"] for row in rows],
+                ["JH1LATER", "JH1EARLY"],
+            )
+
+    def test_find_qso_id_matches_same_instant_in_another_offset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = LogStore(Path(tmp) / "logger.sqlite3")
+            qso_id = store.start_qso(frequency="145.000", mode="FM")
+            store.end_qso(
+                qso_id,
+                callsign="JH1ABC",
+                frequency="145.000",
+                mode="FM",
+                notes="remarks",
+                started_at="2026-11-28T11:54:00+09:00",
+            )
+            found = store.find_qso_id(
+                "JH1ABC",
+                "2026-11-28T02:54:00+00:00",
+                "145.000",
+                "FM",
+            )
+            self.assertEqual(found, qso_id)
+
 
 if __name__ == "__main__":
     unittest.main()

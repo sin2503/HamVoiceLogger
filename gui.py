@@ -8,6 +8,7 @@ import queue
 import sys
 import threading
 import tkinter as tk
+import tkinter.font as tkfont
 import unicodedata
 from datetime import date, datetime, time as datetime_time
 from tkinter import filedialog, messagebox, ttk
@@ -45,6 +46,7 @@ from time_format import (
     format_timestamp,
     is_japan_entity,
     normalize_time_display,
+    same_instant,
 )
 from app_settings import (
     AppSettings,
@@ -1907,7 +1909,11 @@ class VoiceLoggerApp:
             self.history_tree.heading(column, text=headings[column])
             anchor = "center" if column in {"select", "lock"} else "w"
             self.history_tree.column(
-                column, width=widths[column], minwidth=24, anchor=anchor
+                column,
+                width=widths[column],
+                minwidth=24,
+                stretch=False,
+                anchor=anchor,
             )
         # Keep the checkbox column collapsed until delete mode is enabled.
         self.history_tree.column("select", width=0, minwidth=0, stretch=False)
@@ -4217,12 +4223,39 @@ class VoiceLoggerApp:
         self.history_delete_status_var.set(f"{deleted}件を削除しました")
         messagebox.showinfo("QSO履歴の削除", f"{deleted}件を削除しました。", parent=self.root)
 
-    def _on_history_tree_double_click(self, event: tk.Event) -> None:
+    def _on_history_tree_double_click(self, event: tk.Event) -> str | None:
+        region = self.history_tree.identify_region(event.x, event.y)
+        if region in {"heading", "separator"}:
+            self._fit_history_columns()
+            return "break"
         if self._history_delete_mode:
-            return
+            return None
         iid = self.history_tree.identify_row(event.y)
         if iid:
             self._start_history_edit(iid)
+        return None
+
+    def _fit_history_columns(self) -> None:
+        """Size every visible history column to its heading and cell text."""
+        tree = self.history_tree
+        body = tkfont.nametofont("TkDefaultFont")
+        heading_font = tkfont.Font(font="TkDefaultFont", size=9, weight="bold")
+        columns = list(tree["columns"])
+        children = tree.get_children()
+        for index, column in enumerate(columns):
+            if column == "select" and not self._history_delete_mode:
+                tree.column(column, width=0, minwidth=0, stretch=False)
+                continue
+            heading = str(tree.heading(column, "text") or "")
+            width = heading_font.measure(heading) + 28
+            for iid in children:
+                values = tree.item(iid, "values")
+                text = str(values[index]) if index < len(values) else ""
+                width = max(width, body.measure(text) + 20)
+            if column in {"select", "lock"}:
+                width = max(width, 44)
+            width = min(width, 520)
+            tree.column(column, width=width, minwidth=24, stretch=False)
 
     def _edit_selected_history_row(self) -> None:
         if self._history_delete_mode:
@@ -4368,6 +4401,10 @@ class VoiceLoggerApp:
                 parent=self.root,
             )
             return False
+        existing = self.store.get_qso(self.editing_qso_id)
+        started_text = started_at.isoformat(timespec="seconds")
+        if existing is not None and same_instant(existing.get("started_at"), started_text):
+            started_text = str(existing.get("started_at") or started_text)
         callbook_info = dict(self.callbook_data)
         callbook_info.update(
             {
@@ -4384,7 +4421,7 @@ class VoiceLoggerApp:
             self.store.update_qso(
                 self.editing_qso_id,
                 {
-                    "started_at": started_at.isoformat(timespec="seconds"),
+                    "started_at": started_text,
                     "ended_at": ended_at,
                     "callsign": self.qso_callsign_var.get(),
                     "frequency": self.frequency_var.get(),

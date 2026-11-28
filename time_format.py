@@ -27,6 +27,18 @@ def parse_iso_datetime(value: str | None) -> datetime | None:
     return moment
 
 
+def same_instant(left: str | None, right: str | None) -> bool:
+    """True when two stored timestamps are the same moment.
+
+    ``2026-11-28T11:54:00+09:00`` and ``2026-11-28T02:54:00+00:00`` match.
+    """
+    a = parse_iso_datetime(left)
+    b = parse_iso_datetime(right)
+    if a is None or b is None:
+        return str(left or "").strip() == str(right or "").strip()
+    return a.astimezone(timezone.utc) == b.astimezone(timezone.utc)
+
+
 def format_timestamp(value: str | None, mode: str = DEFAULT_TIME_DISPLAY) -> str:
     """Format an ISO timestamp for UI lists according to display mode."""
     moment = parse_iso_datetime(value)
